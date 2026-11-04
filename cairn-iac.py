@@ -35,6 +35,8 @@ DEFAULTS = {
 SETTINGS = [k for k in DEFAULTS if k != "repo"]
 SERVER = {
     "listen": "127.0.0.1:8080", "data_dir": "data", "read_only": False,
+    # SSH private key for the Git remote (its .pub beside it); empty: one is generated in data_dir.
+    "ssh_key": "",
     # Behind an authenticating proxy: requests from these addresses only, user from user_header.
     # Empty: requests from this machine only (loopback), user "local".
     "trusted_proxies": [], "user_header": "Remote-User", "groups_header": "Remote-Groups",
@@ -538,8 +540,8 @@ class App:
         self.settings_file = self.data / "settings.json"
         if not self.settings_file.exists():
             self.save_settings({k: cfg[k] for k in SETTINGS})
-        self.key = self.data / "id_ed25519"
-        if not self.key.exists() and shutil.which("ssh-keygen"):
+        self.key = (cfg["base"] / cfg["ssh_key"]).resolve() if cfg["ssh_key"] else self.data / "id_ed25519"
+        if not cfg["ssh_key"] and not self.key.exists() and shutil.which("ssh-keygen"):
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "cairn-iac", "-f", str(self.key)], check=True)
         self.lock = threading.Lock()  # ponytail: one lock for sync, edits and page builds; fine for a handful of users
         self.synced, self.sync_error, self.cache = 0.0, "", (None, None)
@@ -620,7 +622,7 @@ class App:
                 except (OSError, yaml.YAMLError) as e:  # no clone yet, wrong paths: the Settings page stays reachable
                     self.cache = (None, {**collect_empty(s), "error": str(e)})
             data = dict(self.cache[1])
-        pub = self.key.with_suffix(".pub")
+        pub = pathlib.Path(f"{self.key}.pub")
         data["server"] = {
             "user": user, "rev": rev, "edit": not self.cfg["read_only"], "settings": {k: s[k] for k in SETTINGS},
             "key": pub.read_text().strip() if pub.exists() else "", "sync_error": self.sync_error,
