@@ -1,11 +1,12 @@
 """Smoke test on example/: python3 test_cairn_iac.py"""
-import json, pathlib, tempfile, importlib.util
+import json, pathlib, shutil, subprocess, tempfile, importlib.util
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("cairn_iac", HERE / "cairn-iac.py")
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 
+# ---- the static page ----
 with tempfile.TemporaryDirectory() as tmp:
     out = pathlib.Path(tmp) / "iac.html"
     ci.build(HERE / "example/cairn-iac.json", out)
@@ -17,10 +18,89 @@ assert (web["name"], web["kind"], web["node"], web["id"], web["cores"], web["mem
        ("web", "LXC", "pve1", 201, "2", "2048", "16", "10.0.0.21"), web
 assert (db["kind"], db["memory"], db["disk"], db["ip"]) == ("VM", "8192", "64", "10.0.0.22"), db
 rules = data["firewalls"]["201"]["rules"]
-assert [(r["dir"], r["dport"]) for r in rules] == [("in", "443"), ("out", "5432")], rules
+assert [(r["dir"], r["dport"], r["at"][2]) for r in rules] == [("in", "443", 0), ("out", "5432", 1)], rules
 assert data["playbooks"]["site"][0]["hosts"] == ["db", "pve1", "pve2", "web"]
 assert data["roles"]["web"]["tasks"] == ["Install nginx", "Write the site configuration"]
 assert data["roles"]["web"]["templates"] == ["site.conf.j2"]
 assert data["nodes"] == ["pve1", "pve2"] and data["playbook_prefix"] == "playbooks/"
+assert data["direct"]["guests"] == ["db", "web"]
 assert "<title>Example lab</title>" in page and "/*DATA*/" not in page
+
+# ---- edits, on a copy of the example made a Git repo ----
+def refused(f, *a):
+    try:
+        f(*a)
+    except ci.Refused as e:
+        return e.msg.format(**e.v)
+    raise AssertionError(f"not refused: {f.__name__}{a}")
+
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp) / "repo"
+    shutil.copytree(HERE / "example", repo)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout
+    git("init", "-q", "-b", "main"); git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    cfg = ci.load_config(repo / "cairn-iac.json")
+
+    def run(op):
+        rel, old, new, msg = ci.apply(op, cfg, repo)
+        (repo / rel).write_text(new, encoding="utf-8", newline="")
+        return msg
+
+    # resources: VM nested blocks (cpu.cores, memory.dedicated, disk.size)
+    assert run({"op": "resources", "file": "tofu/main.tf", "line": 32, "name": "db", "cores": 6, "memory": 16384, "disk": 80}) == \
+           "db: cores 4 -> 6, memory 8192 -> 16384, disk 64 -> 80"
+    d = {m["name"]: m for m in ci.read_tofu(repo / "tofu", repo)[0]}["db"]
+    assert (d["cores"], d["memory"], d["disk"]) == ("6", "16384", "80"), d
+    assert "shrink" in refused(ci.apply, {"op": "resources", "file": "tofu/main.tf", "line": 32, "disk": 10}, cfg, repo)
+    assert "reload" in refused(ci.apply, {"op": "resources", "file": "tofu/main.tf", "line": 33, "cores": 2}, cfg, repo)
+    assert "Unknown file" in refused(ci.apply, {"op": "resources", "file": "../x.tf", "line": 1}, cfg, repo)
+
+    # firewall: add then remove, provider resource
+    rule = {"dir": "in", "proto": "tcp", "dport": "22", "addr": "10.0.0.0/24", "comment": "SSH from the LAN"}
+    run({"op": "fw_add", "file": "tofu/main.tf", "line": 61, "name": "web", "rule": rule})
+    fw = ci.read_tofu(repo / "tofu", repo)[1]["201"]["rules"]
+    assert (fw[-1]["dir"], fw[-1]["dport"], fw[-1]["source"], fw[-1]["comment"]) == ("in", "22", "10.0.0.0/24", "SSH from the LAN"), fw
+    assert "comment" in refused(ci.check_rule, {**rule, "comment": 'a"b'})
+    assert "port" in refused(ci.check_rule, {**rule, "dport": "70000"})
+    run({"op": "fw_del", "file": "tofu/main.tf", "line": 61, "index": 0})
+    assert [r["dport"] for r in ci.read_tofu(repo / "tofu", repo)[1]["201"]["rules"]] == ["5432", "22"]
+
+    # firewall: a module with rule lists, one rule per line, and a list created when missing
+    mod = 'module "fw_web" {\n  source       = "./fw"\n  container_id = 301\n\n  inbound_rules = [\n    { comment = "a", proto = "tcp", dport = "80" },\n  ]\n}'
+    lists = {"in": "inbound_rules", "out": "extra_egress_rules"}
+    b = ci.fw_add(mod, {"dir": "out", "proto": "udp", "dport": "53", "addr": "10.0.0.2", "comment": "DNS"}, lists)
+    b = ci.fw_add(b, {"dir": "in", "proto": "icmp", "comment": "ping"}, lists)
+    assert [(d, b[s:e]) for d, s, e in ci.fw_rules(b)] == [
+        ("in", '{ comment = "a", proto = "tcp", dport = "80" }'), ("in", '{ comment = "ping", proto = "icmp" }'),
+        ("out", '{ comment = "DNS", proto = "udp", dport = "53", dest = "10.0.0.2" }')], b
+    assert ci.fw_rules(ci.fw_del(b, 0))[0][0] == "in" and len(ci.fw_rules(ci.fw_del(b, 0))) == 2
+
+    # inventory: add to a group (new machine with its address), remove; vars are protected
+    run({"op": "group_add", "group": "guests", "host": "cache", "ip": "10.0.0.23"})
+    groups, direct, ips = ci.read_inventory((repo / cfg["inventory"]).read_text(encoding="utf-8"))
+    assert "cache" in direct["guests"] and ips["cache"] == "10.0.0.23"
+    assert "variables" in refused(ci.apply, {"op": "group_del", "group": "guests", "host": "cache"}, cfg, repo)
+    run({"op": "group_add", "group": "proxmox_nodes", "host": "web"})
+    run({"op": "group_del", "group": "proxmox_nodes", "host": "web"})
+    assert ci.read_inventory((repo / cfg["inventory"]).read_text(encoding="utf-8"))[1]["proxmox_nodes"] == ["pve1", "pve2"]
+
+    # a role for a host: a new play
+    run({"op": "role_add", "playbook": "site", "role": "web", "host": "db"})
+    groups, direct, ips, pbs, roles = ci.read_ansible(cfg, repo)
+    assert pbs["site"][-1] == {"hosts": ["db"], "roles": ["web"]}
+    assert "Unknown role" in refused(ci.apply, {"op": "role_add", "playbook": "site", "role": "nope", "host": "db"}, cfg, repo)
+
+    # the server's commit path, without a remote: author from the proxy headers
+    app = ci.App({**cfg, "data_dir": str(pathlib.Path(tmp) / "data"), "repo": str(repo), "base": repo})
+    git("checkout", "-q", "--", ".")
+    class Req:
+        headers = {"Remote-Name": "Ada Lovelace", "Remote-Email": "ada@example.org"}
+    app.proxies = ["x"]  # as if behind a proxy, for the author headers
+    head = app.head(repo)
+    op = {"op": "resources", "file": "tofu/main.tf", "line": 2, "name": "web", "cores": 3, "rev": head}
+    assert "+    cores = 3" in app.edit(Req, "ada", op, False)["diff"]
+    out = app.edit(Req, "ada", op, True)
+    assert out["ok"] and not out["pushed"]
+    assert git("log", "-1", "--format=%an <%ae>|%cn|%s").strip() == "Ada Lovelace <ada@example.org>|Cairn IaC|web: cores 2 -> 3"
+    assert "moved" in refused(app.edit, Req, "ada", op, False)
 print("ok")

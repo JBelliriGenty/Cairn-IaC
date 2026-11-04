@@ -10,7 +10,7 @@
   --bg: #eef1f8; --panel: #ffffff; --fg: #131416; --muted: #5d5f60; --line: #e5e8ef; --control: #8b909a;
   --track: #eceff5; --primary: #1d1f20; --on-primary: #ffffff; --accent: #4f46e5;
   --c-pool: #0d9488; --c-temp: #db2777; --pool-ink: #0f766e; --temp-ink: #be185d;
-  --ok: #1e7b4f; --ok-bg: #dcfae5; --ok-ink: #04250e;
+  --ok: #1e7b4f; --ok-bg: #dcfae5; --ok-ink: #04250e; --bad: #b42318;
   --radius: 8px; --radius-sheet: 16px;
   --duration-stagger: 40ms; --duration-slow: 400ms; --distance-base: 8px; --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
   --tofu: var(--c-pool); --tofu-ink: var(--pool-ink); --ans: var(--c-temp); --ans-ink: var(--temp-ink);
@@ -20,7 +20,7 @@
   --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
   --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
   --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
-  --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a;
+  --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -28,14 +28,14 @@
     --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
     --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
     --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
-    --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a;
+    --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066;
     color-scheme: dark;
   }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 
 /* layout */
 .app { display: grid; grid-template-columns: 228px 1fr; min-height: 100vh; }
@@ -177,6 +177,34 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; overflow-x: auto; border-radius:
 .layer .sub a { color: var(--accent); }
 .role .sub { white-space: pre-line; margin: 0 0 8px; }
 .empty { color: var(--muted); margin: 0; }
+
+/* editing (server mode) */
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 10px; align-items: end; margin-top: 10px; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+.form .wide { grid-column: 1 / -1; }
+input, textarea { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px; background: var(--panel); min-width: 0; width: 100%; }
+input[type=checkbox] { width: auto; }
+label.check { flex-direction: row; align-items: center; color: var(--fg); font-size: 14px; }
+textarea { min-height: 70px; resize: vertical; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+button.small { padding: 2px 8px; font-size: 12px; }
+.edit summary { font-size: 14px; }
+.pill.x { border: 0; cursor: pointer; font: inherit; font-size: 12px; }
+.pill.x:hover { background: color-mix(in srgb, var(--bad) 14%, var(--panel)); }
+.err { color: var(--bad); margin: 0; }
+.okmsg { color: var(--ok); margin: 0; }
+dialog { border: 1px solid var(--line); border-radius: var(--radius-sheet); background: var(--panel); color: var(--fg); padding: 20px;
+  width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+.review { display: flex; flex-direction: column; gap: 12px; }
+.review label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.review .row { justify-content: flex-end; }
+pre.diff { max-height: 50vh; }
+.diff .add { color: var(--ok); } .diff .del { color: var(--bad); } .diff .hunk { color: var(--accent); }
+.settings { display: flex; flex-direction: column; gap: 14px; max-width: 980px; }
+.settings h3 { margin-bottom: 2px; }
+.key { display: block; overflow-wrap: anywhere; background: var(--track); border-radius: 6px; padding: 8px 10px; }
 </style>
 <div class="app">
   <aside class="side">
@@ -188,6 +216,7 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; overflow-x: auto; border-radius:
       <button data-view="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n>Overview</span></button>
       <button data-view="machines"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg><span data-i18n>Machines</span></button>
       <button data-view="roles"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span data-i18n>Roles</span></button>
+      <button data-view="settings" hidden><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span data-i18n>Settings</span></button>
     </nav>
     <div class="side-foot">
       <div class="legend">
@@ -229,12 +258,29 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; overflow-x: auto; border-radius:
     <section class="view" data-view="roles" hidden>
       <div class="card table-wrap"><table id="roles"></table></div>
     </section>
+
+    <section class="view" data-view="settings" hidden>
+      <div class="settings" id="settings"></div>
+    </section>
   </main>
 </div>
+
+<dialog id="review" aria-labelledby="rv-title">
+  <div class="review">
+    <div><h3 id="rv-title" data-i18n>Review the change</h3><p class="meta mono" id="rv-file"></p></div>
+    <pre class="code diff" id="rv-diff"></pre>
+    <label><span data-i18n>Commit message</span><input id="rv-msg" maxlength="2000"></label>
+    <p class="sub" id="rv-note"></p>
+    <p class="err" id="rv-err" role="alert"></p>
+    <div class="row"><button class="ghost" id="rv-cancel" data-i18n>Cancel</button><button class="primary" id="rv-go"></button></div>
+  </div>
+</dialog>
 
 <script>
 "use strict";
 const D = /*DATA*/null;
+// Server mode only: user, current commit, settings; EDIT turns the forms on.
+const S = D.server, EDIT = !!(S && S.edit);
 
 // ---------- i18n: the code is in English; each table maps English source strings to a language ----------
 // Add a language: copy FR, translate the values, add it to DICT and LANGS.
@@ -289,6 +335,120 @@ const FR = {
   "View in {name}": "Voir dans {name}", "Edit in {name}": "Modifier dans {name}",
   "Edit the inventory": "Modifier l'inventaire", "Edit the tasks": "Modifier les tâches",
   "GB": "Go", "GiB": "Gio", "MiB": "Mio",
+  // server mode: forms, settings, refusals sent by the server
+  "Settings": "Réglages",
+  "Review the change": "Relire la modification",
+  "Commit message": "Message du commit",
+  "Cancel": "Annuler",
+  "Change the resources": "Modifier les ressources",
+  "Preview": "Voir la modification",
+  "Remove": "Retirer",
+  "Add a rule": "Ajouter une règle",
+  "Protocol": "Protocole",
+  "Remove from {group}": "Retirer de {group}",
+  "Add to a group": "Ajouter à un groupe",
+  "Add a role": "Ajouter un rôle",
+  "In the playbook": "Dans le playbook",
+  "Commit {sha} pushed. Next: plan and apply, or run the playbook, as the path shows.": "Commit {sha} poussé. Ensuite : plan et apply, ou le playbook, comme le trajet l'indique.",
+  "Commit {sha} made (not pushed). Next: plan and apply, or run the playbook, as the path shows.": "Commit {sha} fait (non poussé). Ensuite : plan et apply, ou le playbook, comme le trajet l'indique.",
+  "Commit and push": "Committer et pousser",
+  "Commit": "Committer",
+  "Authored by {user}, on the branch {branch}.": "Commit à votre nom ({user}), sur la branche {branch}.",
+  "Page": "Page",
+  "Title": "Titre",
+  "Subtitle": "Sous-titre",
+  "Default language": "Langue par défaut",
+  "Browser language": "Langue du navigateur",
+  "Repository layout": "Organisation du dépôt",
+  "Tofu directory": "Répertoire Tofu",
+  "Ansible inventory": "Inventaire Ansible",
+  "Playbooks directory": "Répertoire des playbooks",
+  "Roles directory": "Répertoire des rôles",
+  "Inventory groups": "Groupes d'inventaire",
+  "Group of the Proxmox nodes": "Groupe des nœuds Proxmox",
+  "Group of the physical machines outside the cluster": "Groupe des machines physiques hors cluster",
+  "Fleet-wide playbooks, never shown as a machine's own (comma-separated)": "Playbooks de parc, jamais montrés comme ceux d'une machine (séparés par des virgules)",
+  "Path of a change": "Trajet d'un changement",
+  "Machine shown first": "Machine montrée d'abord",
+  "Workstation": "Poste de travail",
+  "Tofu command": "Commande Tofu",
+  "Who applies the plan": "Qui applique le plan",
+  "Git server": "Serveur Git",
+  "Ansible controller": "Contrôleur Ansible",
+  "Repository path on the controller": "Chemin du dépôt sur le contrôleur",
+  "Ansible command": "Commande Ansible",
+  "Note on the overview": "Note de la vue d'ensemble",
+  "Text (`code` between backquotes)": "Texte (`code` entre accents graves)",
+  "Links to the Git web interface": "Liens vers l'interface web de Git",
+  "Name": "Nom",
+  "View URL, with {file} and {line}": "Adresse pour voir, avec {file} et {line}",
+  "Edit URL, with {file}": "Adresse pour modifier, avec {file}",
+  "Firewall modules": "Modules de pare-feu",
+  "List for incoming rules": "Liste des règles entrantes",
+  "List for outgoing rules": "Liste des règles sortantes",
+  "Remote (empty: the local repository, nothing pushed)": "Dépôt distant (vide : le dépôt local, rien n'est poussé)",
+  "Branch": "Branche",
+  "Push after each commit": "Pousser après chaque commit",
+  "Committer name": "Nom du committeur",
+  "Committer email": "Adresse du committeur",
+  "Commit message prefix": "Préfixe des messages de commit",
+  "Deploy key": "Clé de déploiement",
+  "Give this key write access to the repository (a deploy key on the Git server), for an ssh:// remote.": "Donnez à cette clé l'accès en écriture au dépôt (clé de déploiement sur le serveur Git), pour un dépôt distant ssh://.",
+  "Copy": "Copier",
+  "Copied": "Copiée",
+  "Test the connection": "Tester la connexion",
+  "No key: ssh-keygen is missing on the server.": "Pas de clé : ssh-keygen manque sur le serveur.",
+  "Last sync: {time}": "Dernière synchronisation : {time}",
+  "Not synchronised yet.": "Pas encore synchronisé.",
+  "Save": "Enregistrer",
+  "Signed in as {user}. Who may sign in and edit is set in the server's configuration file, not here.": "Connecté en tant que {user}. Qui peut se connecter et modifier se règle dans le fichier de configuration du serveur, pas ici.",
+  "Saved; Git: {err}": "Enregistré ; Git : {err}",
+  "Saved.": "Enregistré.",
+  "The remote answers.": "Le dépôt distant répond.",
+  "Cannot read the repository: {err}": "Lecture du dépôt impossible : {err}",
+  "Check the Settings.": "Vérifiez les Réglages.",
+  "Access denied": "Accès refusé",
+  "Invalid request": "Requête invalide",
+  "Invalid {what}: {value}": "{what} invalide : {value}",
+  "{what} must be between {lo} and {hi}": "{what} : entre {lo} et {hi}",
+  "No literal value for {what} in the block (variable?): edit it in the file": "Pas de valeur littérale pour {what} dans le bloc (variable ?) : modifiez le fichier",
+  "A disk cannot shrink ({old} → {new} GB)": "Un disque ne peut pas rétrécir ({old} → {new} Go)",
+  "The comment is required, 200 characters at most, without quotes or backslashes": "Le commentaire est obligatoire, 200 caractères au plus, sans guillemets ni barres obliques inverses",
+  "Set the firewall list for {dir} rules in Settings": "Réglez la liste du pare-feu pour les règles « {dir} » dans Réglages",
+  "The list {name} is not written one rule per line: edit it in the file": "La liste {name} n'est pas écrite une règle par ligne : modifiez le fichier",
+  "No such rule: the file changed, reload the page": "Règle introuvable : le fichier a changé, rechargez la page",
+  "This rule shares its line with another: edit it in the file": "Cette règle partage sa ligne avec une autre : modifiez le fichier",
+  "No block at line {line}: the file changed, reload the page": "Aucun bloc ligne {line} : le fichier a changé, rechargez la page",
+  "Group {group} not found in the inventory, or not written as a block": "Groupe {group} introuvable dans l'inventaire, ou pas écrit en bloc",
+  "The hosts of {group} are not written as a block: edit it in the file": "Les hôtes de {group} ne sont pas écrits en bloc : modifiez le fichier",
+  "{host} is already in {group}": "{host} est déjà dans {group}",
+  "The edit did not give the expected inventory: edit it in the file": "La modification ne donne pas l'inventaire attendu : modifiez le fichier",
+  "{host} has variables in {group}: edit it in the file": "{host} a des variables dans {group} : modifiez le fichier",
+  "{host} is not listed directly in {group}": "{host} n'est pas listé directement dans {group}",
+  "The edit did not give the expected playbook: edit it in the file": "La modification ne donne pas le playbook attendu : modifiez le fichier",
+  "The edit did not give the expected file: edit it in the file": "La modification ne donne pas le fichier attendu : modifiez-le à la main",
+  "Unknown file: {file}": "Fichier inconnu : {file}",
+  "Unknown role: {role}": "Rôle inconnu : {role}",
+  "Unknown edit: {op}": "Modification inconnue : {op}",
+  "Editing is turned off on this server": "La modification est désactivée sur ce serveur",
+  "git {cmd}: {err}": "git {cmd} : {err}",
+  "The repository moved since the page was loaded: reload the page": "Le dépôt a bougé depuis le chargement de la page : rechargez-la",
+  "Nothing changes": "Rien ne change",
+  "No Git remote set": "Aucun dépôt distant réglé",
+  "Git did not answer in time": "Git n'a pas répondu à temps",
+  "Not found": "Introuvable",
+  "cores": "vCPU",
+  "memory": "mémoire",
+  "disk": "disque",
+  "direction": "sens",
+  "protocol": "protocole",
+  "port": "port",
+  "address": "adresse",
+  "message": "message",
+  "group": "groupe",
+  "host": "hôte",
+  "role": "rôle",
+  "playbook": "playbook",
 };
 const DICT = {fr: FR};
 const LANGS = {en: {name: "English", locale: "en-GB"}, fr: {name: "Français", locale: "fr-FR"}};
@@ -341,10 +501,11 @@ for (const m of Object.values(M)) for (const r of m.roles) (roleUse[r] ||= []).p
 $("#title").textContent = D.title;
 $("#subtitle").textContent = D.subtitle;
 document.querySelectorAll("[data-i18n]").forEach(e => e.textContent = t(e.textContent));
-$("#meta").textContent = t("Read from the repository{rev}", {rev: D.rev ? ` · ${D.rev}` : ""});
+$("#meta").textContent = t("Read from the repository{rev}", {rev: D.rev ? ` · ${D.rev}` : ""}) + (S ? ` · ${S.user}` : "");
 const nAns = Object.values(M).filter(m => m.roles.length).length, nFw = Object.keys(D.firewalls).length;
 $("#verdict").textContent = [tp(D.tofu.length, "{n} machine described by Tofu", "{n} machines described by Tofu"),
   tp(nAns, "{n} configured by Ansible", "{n} configured by Ansible"), tp(nFw, "{n} guest firewall", "{n} guest firewalls")].join(", ");
+if (D.error) $("#verdict").textContent = t("Cannot read the repository: {err}", {err: D.error}) + (EDIT ? " " + t("Check the Settings.") : "");
 if (D.note && D.note.text) $("#note").innerHTML = `<h2>${esc(D.note.title || "")}</h2><article class="card"><p class="empty">${esc(D.note.text).replace(/`([^`]+)`/g, "<code>$1</code>")}</p></article>`;
 
 // ---------- machines map ----------
@@ -425,24 +586,151 @@ function renderDetail(m) {
       <div class="stat"><span>${t("Memory")}</span><b>${mem(+tf.memory)}</b></div>
       <div class="stat"><span>${t("Disk")}</span><b>${disk(tf.disk)}</b></div>
       <div class="stat"><span>${t("Tofu address")}</span><b class="mono">${esc(tf.address)}</b></div></div>
-      <details><summary>${esc(t("Show the code ({file}, line {line})", {file: tf.file, line: tf.line}))}</summary><pre class="code">${hcl(tf.code)}</pre></details>${linkRow(tf.file, tf.line)}`
+      <details><summary>${esc(t("Show the code ({file}, line {line})", {file: tf.file, line: tf.line}))}</summary><pre class="code">${hcl(tf.code)}</pre></details>${linkRow(tf.file, tf.line)}
+      ${EDIT ? `<details class="edit"><summary>${t("Change the resources")}</summary><form class="form" data-op="resources">
+        <label>vCPU<input name="cores" type="number" min="1" max="512" value="${esc(tf.cores)}"></label>
+        <label>${t("Memory")} (${t("MiB")})<input name="memory" type="number" min="16" value="${esc(tf.memory)}"></label>
+        <label>${t("Disk")} (${t("GB")})<input name="disk" type="number" min="${esc(tf.disk || 1)}" value="${esc(tf.disk)}"></label>
+        <button class="primary">${t("Preview")}</button></form></details>` : ""}`
     : `<p class="empty">${t(m.phys ? "Physical machine: no Tofu file creates it." : "Not described by Tofu.")}</p>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("Firewall")}</h3><span class="pill t">tofu</span></div>`;
-  h += m.fw && m.fw.rules.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Direction")}</th><th>${t("Port")}</th><th>${t("From / to")}</th><th>${t("Why")}</th></tr></thead><tbody>${m.fw.rules.map(r =>
-      `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td></tr>`).join("")}</tbody></table></div>${linkRow(m.fw.file, m.fw.line)}`
+  h += m.fw && m.fw.rules.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Direction")}</th><th>${t("Port")}</th><th>${t("From / to")}</th><th>${t("Why")}</th>${EDIT ? "<th></th>" : ""}</tr></thead><tbody>${m.fw.rules.map((r, i) =>
+      `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td>${EDIT ? `<td><button class="small ghost" data-del="${i}">${t("Remove")}</button></td>` : ""}</tr>`).join("")}</tbody></table></div>${linkRow(m.fw.file, m.fw.line)}`
     : `<p class="empty">${t(m.fw ? "Firewall declared without rules of its own." : "No guest firewall in the repository.")}</p>`;
+  if (EDIT && m.fw) h += `<details class="edit"><summary>${t("Add a rule")}</summary><form class="form" data-op="fw_add">
+      <label>${t("Direction")}<select name="dir"><option value="in">${t("In")}</option><option value="out">${t("Out")}</option></select></label>
+      <label>${t("Protocol")}<select name="proto"><option>tcp</option><option>udp</option><option>icmp</option></select></label>
+      <label>${t("Port")}<input name="dport" placeholder="443, 8000:8010" class="mono"></label>
+      <label>${t("From / to")}<input name="addr" placeholder="${t("anywhere")}" class="mono"></label>
+      <label class="wide">${t("Why")}<input name="comment" required maxlength="200"></label>
+      <button class="primary">${t("Preview")}</button></form></details>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("The content")}</h3><span class="pill a">ansible</span></div>`;
+  const host = m.host || m.key, direct = Object.keys(D.direct || {}).filter(g => D.direct[g].includes(host));
+  const groupPills = () => `<div class="pills">${(hostGroups[m.key] || []).map(g => EDIT && direct.includes(g)
+    ? `<button class="pill x" data-ungroup="${esc(g)}" title="${esc(t("Remove from {group}", {group: g}))}">${esc(g)} ×</button>`
+    : `<span class="pill" title="${t("Inventory group")}">${esc(g)}</span>`).join("")}</div>`;
   if (m.roles.length) {
-    h += `<div class="pills">${(hostGroups[m.key] || []).map(g => `<span class="pill" title="${t("Inventory group")}">${esc(g)}</span>`).join("")}</div>
+    h += `${groupPills()}
     <div class="roles">${m.roles.map(r => {
       const R = D.roles[r] || {tasks: [], about: "", templates: []};
       return `<details class="role"><summary><code>${esc(r)}</code><span class="label">${tp(R.tasks.length, "{n} task", "{n} tasks")}</span></summary>${R.about ? `<p class="sub">${esc(R.about)}</p>` : ""}<ol>${R.tasks.map(x => `<li>${esc(x)}</li>`).join("")}</ol>${R.templates.length ? `<p class="sub">${esc(t("Files rendered from: {list}", {list: R.templates.join(", ")}))}</p>` : ""}${L.edit ? `<div class="chips"><a class="chip" href="${esc(url(L.edit, `${P.roles}/${r}/tasks/main.yml`))}" target="_blank" rel="noopener">${esc(t("Edit the tasks"))}</a></div>` : ""}</details>`;
     }).join("")}</div>
     <p class="sub">${t("Playbooks targeting it: {list}", {list: m.pbs.map(p => L.view ? `<a href="${esc(url(L.view, `${P.playbooks}/${p}.yml`))}" target="_blank" rel="noopener">${esc(p)}.yml</a>` : esc(p + ".yml")).join(", ")})}</p>
     ${L.edit ? `<div class="chips"><a class="chip" href="${esc(url(L.edit, P.inventory))}" target="_blank" rel="noopener">${esc(t("Edit the inventory"))}</a></div>` : ""}`;
-  } else h += `<p class="empty">${t(m.host ? "In the inventory, but no playbook gives it a role." : "Not in the Ansible inventory.")}</p>`;
+  } else h += (m.host ? groupPills() : "") + `<p class="empty">${t(m.host ? "In the inventory, but no playbook gives it a role." : "Not in the Ansible inventory.")}</p>`;
+  if (EDIT && (m.host || m.tofu)) {
+    const groups = Object.keys(D.groups).filter(g => !D.groups[g].includes(host)).sort();
+    const roles = Object.keys(D.roles).filter(r => !m.roles.includes(r)).sort(), pbs = Object.keys(D.playbooks).sort();
+    if (groups.length) h += `<details class="edit"><summary>${t("Add to a group")}</summary><form class="form" data-op="group_add">
+      <label>${t("Inventory group")}<select name="group">${groups.map(g => `<option>${esc(g)}</option>`).join("")}</select></label>
+      ${m.host ? "" : `<label>ansible_host<input name="ip" class="mono" value="${esc(m.ip)}"></label>`}
+      <button class="primary">${t("Preview")}</button></form></details>`;
+    if (m.host && roles.length && pbs.length) h += `<details class="edit"><summary>${t("Add a role")}</summary><form class="form" data-op="role_add">
+      <label>${t("Role")}<select name="role">${roles.map(r => `<option>${esc(r)}</option>`).join("")}</select></label>
+      <label>${t("In the playbook")}<select name="playbook">${pbs.map(p => `<option${p === pickPb(m) ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+      <button class="primary">${t("Preview")}</button></form></details>`;
+  }
   $("#detail").innerHTML = h + `</section>`;
 }
+
+// ---------- editing (server mode): a form gives an edit, the server shows its diff, then commits and pushes ----------
+async function api(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({error: "Invalid request"}));
+  if (!r.ok || j.error) throw j.error ? j : {error: "Invalid request"};
+  return j;
+}
+const errText = e => e && e.error ? t(e.error, {...e.vars, what: t(e.vars?.what ?? "")}) : String(e);
+let pending = null;
+async function preview(op, where) {
+  op = {...op, rev: S.rev};
+  try {
+    const p = await api("/api/preview", op);
+    pending = op;
+    $("#rv-file").textContent = p.file;
+    $("#rv-diff").innerHTML = p.diff.split("\n").map(l => `<span class="${l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : ""}">${esc(l)}</span>`).join("\n");
+    $("#rv-msg").value = p.message;
+    $("#rv-err").textContent = "";
+    $("#rv-go").disabled = false;
+    $("#review").showModal();
+  } catch (e) {
+    where.querySelector(".err")?.remove();
+    where.insertAdjacentHTML("beforeend", `<p class="err wide" role="alert">${esc(errText(e))}</p>`);
+  }
+}
+$("#rv-cancel").addEventListener("click", () => $("#review").close());
+$("#rv-go").addEventListener("click", async () => {
+  $("#rv-go").disabled = true; $("#rv-err").textContent = "";
+  try {
+    const c = await api("/api/commit", {...pending, message: $("#rv-msg").value});
+    $("#rv-err").className = "okmsg";
+    $("#rv-err").textContent = t(c.pushed ? "Commit {sha} pushed. Next: plan and apply, or run the playbook, as the path shows." : "Commit {sha} made (not pushed). Next: plan and apply, or run the playbook, as the path shows.", {sha: c.commit});
+    setTimeout(() => location.reload(), 2500);
+  } catch (e) { $("#rv-err").className = "err"; $("#rv-err").textContent = errText(e); $("#rv-go").disabled = false; }
+});
+$("#detail").addEventListener("submit", e => {
+  e.preventDefault();
+  const f = e.target, m = M[current], v = Object.fromEntries(new FormData(f)), op = f.dataset.op, host = m.host || m.key;
+  if (op === "resources") preview({op, file: m.tofu.file, line: m.tofu.line, name: m.name, ...v}, f);
+  else if (op === "fw_add") preview({op, file: m.fw.file, line: m.fw.line, name: m.name, rule: v}, f);
+  else preview({op, host, ...v}, f);
+});
+$("#detail").addEventListener("click", e => {
+  const b = e.target.closest("[data-del], [data-ungroup]"); if (!b) return;
+  const m = M[current], where = b.closest("section");
+  if (b.dataset.ungroup) return preview({op: "group_del", host: m.host || m.key, group: b.dataset.ungroup}, where);
+  const r = m.fw.rules[+b.dataset.del];
+  preview({op: "fw_del", file: r.at[0], line: r.at[1], index: r.at[2], name: m.name, comment: r.comment}, where);
+});
+
+// ---------- settings (server mode): stored by the server, the page reloads with them ----------
+const FORM = [
+  ["Page", [["title", "Title"], ["subtitle", "Subtitle"], ["lang", "Default language", "lang"]]],
+  ["Repository layout", [["tofu_dir", "Tofu directory"], ["inventory", "Ansible inventory"], ["playbooks", "Playbooks directory"], ["roles", "Roles directory"]]],
+  ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Group of the physical machines outside the cluster"],
+    ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
+  ["Path of a change", [["workflow.example", "Machine shown first"], ["workflow.workstation", "Workstation"], ["workflow.tofu", "Tofu command"],
+    ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
+    ["workflow.controller_path", "Repository path on the controller"], ["workflow.ansible", "Ansible command"]]],
+  ["Note on the overview", [["note.title", "Title"], ["note.text", "Text (`code` between backquotes)", "text"]]],
+  ["Links to the Git web interface", [["links.name", "Name"], ["links.view", "View URL, with {file} and {line}"], ["links.edit", "Edit URL, with {file}"]]],
+  ["Firewall modules", [["firewall_lists.in", "List for incoming rules"], ["firewall_lists.out", "List for outgoing rules"]]],
+  ["Git", [["git.url", "Remote (empty: the local repository, nothing pushed)"], ["git.branch", "Branch"], ["git.push", "Push after each commit", "bool"],
+    ["git.name", "Committer name"], ["git.email", "Committer email"], ["git.commit_prefix", "Commit message prefix"]]],
+];
+const getp = (o, p) => p.split(".").reduce((a, k) => a == null ? undefined : a[k], o);
+function renderSettings() {
+  const st = S.settings;
+  const field = ([p, l, type]) => {
+    const label = t(l, {file: "{file}", line: "{line}"}), v = getp(st, p), id = "s-" + p.replace(".", "-");
+    if (type === "bool") return `<label class="check wide"><input type="checkbox" id="${id}" data-p="${p}" data-t="bool"${v ? " checked" : ""}> ${esc(label)}</label>`;
+    if (type === "text") return `<label class="wide">${esc(label)}<textarea id="${id}" data-p="${p}">${esc(v)}</textarea></label>`;
+    if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
+    return `<label${/url|text|generic/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
+  };
+  $("#settings").innerHTML = FORM.map(([title, fs]) => `<article class="card"><h3>${t(title)}</h3><div class="form">${fs.map(field).join("")}</div></article>`).join("")
+    + `<article class="card"><h3>${t("Deploy key")}</h3><p class="sub">${t("Give this key write access to the repository (a deploy key on the Git server), for an ssh:// remote.")}</p>
+      ${S.key ? `<code class="key" id="s-key">${esc(S.key)}</code><div class="row" style="margin-top:8px"><button class="small" id="s-copy">${t("Copy")}</button><button class="small" id="s-test">${t("Test the connection")}</button><span class="sub" id="s-test-out"></span></div>` : `<p class="empty">${t("No key: ssh-keygen is missing on the server.")}</p>`}
+      <p class="sub">${esc(S.synced ? t("Last sync: {time}", {time: S.synced}) : t("Not synchronised yet."))}</p>${S.sync_error ? `<p class="err">${esc(S.sync_error)}</p>` : ""}</article>
+    <div class="row"><button class="primary" id="s-save">${t("Save")}</button><span id="s-out" role="status"></span></div>
+    <p class="sub">${esc(t("Signed in as {user}. Who may sign in and edit is set in the server's configuration file, not here.", {user: S.user}))}</p>`;
+}
+function saveSettings() {
+  const st = JSON.parse(JSON.stringify(S.settings));
+  document.querySelectorAll("#settings [data-p]").forEach(e => {
+    const [a, b] = e.dataset.p.split("."), v = e.dataset.t === "bool" ? e.checked : e.dataset.t === "list" ? e.value.split(",").map(x => x.trim()).filter(Boolean) : e.value.trim();
+    if (b) (st[a] ||= {})[b] = v; else st[a] = v;
+  });
+  if (st.note && !st.note.text) st.note = null;
+  api("/api/settings", st).then(r => { $("#s-out").className = "okmsg"; $("#s-out").textContent = r.sync_error ? t("Saved; Git: {err}", {err: r.sync_error}) : t("Saved."); setTimeout(() => { location.hash = "settings"; location.reload(); }, 900); },
+    e => { $("#s-out").className = "err"; $("#s-out").textContent = errText(e); });
+}
+$("#settings").addEventListener("click", e => {
+  if (e.target.id === "s-save") saveSettings();
+  if (e.target.id === "s-copy") navigator.clipboard?.writeText(S.key).then(() => e.target.textContent = t("Copied"));
+  if (e.target.id === "s-test") api("/api/git-test", {}).then(() => { $("#s-test-out").className = "okmsg"; $("#s-test-out").textContent = t("The remote answers."); },
+    err => { $("#s-test-out").className = "err"; $("#s-test-out").textContent = errText(err); });
+});
 
 const first = M[D.workflow?.example] || Object.values(M).find(m => m.tofu && m.roles.length) || Object.values(M)[0];
 let current = first?.key;
@@ -462,7 +750,14 @@ $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><
   `<tr><td><code>${esc(r)}</code></td><td class="num" data-label="${t("Tasks")}">${D.roles[r].tasks.length}</td><td class="wrap" data-label="${t("Machines")}"><div class="chips">${(roleUse[r] || []).sort().map(k => `<a class="chip" href="#${k}">${esc(M[k].name)}</a>`).join("") || `<span class="label">${t("None, or included by another role")}</span>`}</div></td></tr>`).join("")}</tbody>`;
 
 // ---------- views and address (#overview, #machines, #roles, #<machine>) ----------
-const VIEWS = ["overview", "machines", "roles"];
+const VIEWS = ["overview", "machines", "roles", ...(EDIT ? ["settings"] : [])];
+if (EDIT) {
+  document.querySelector('#nav [data-view="settings"]').hidden = false;
+  renderSettings();
+  const g = S.settings.git;
+  $("#rv-go").textContent = t(g.url && g.push ? "Commit and push" : "Commit");
+  $("#rv-note").textContent = t("Authored by {user}, on the branch {branch}.", {user: S.user, branch: g.url ? g.branch : "HEAD"});
+}
 function show(view) {
   document.querySelectorAll(".view").forEach(s => {
     const on = s.dataset.view === view;
@@ -496,5 +791,6 @@ $("#lang").addEventListener("click", () => {
   location.reload();
 });
 
-if (first) { selectHost(current); route(); }
+if (first) selectHost(current);
+route();
 </script>
