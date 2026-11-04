@@ -22,7 +22,7 @@ DEFAULTS = {
     "tofu_dir": "tofu", "inventory": "ansible/inventory/hosts.yml",
     "playbooks": "ansible/playbooks", "roles": "ansible/roles",
     "node_group": "proxmox_nodes", "bare_metal_group": "bare_metal",
-    "generic_playbooks": [], "note": None,
+    "generic_playbooks": [], "note": None, "links": {},
     "workflow": {},
 }
 VM_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
@@ -190,7 +190,8 @@ def build(cfg_path, out_path):
     data = {
         "title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": git_rev(repo),
         "workflow": cfg["workflow"], "note": cfg["note"], "playbook_prefix": pb_prefix,
-        "generic_playbooks": cfg["generic_playbooks"],
+        "generic_playbooks": cfg["generic_playbooks"], "links": cfg["links"],
+        "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "ips": ips,
         "playbooks": playbooks, "roles": roles,

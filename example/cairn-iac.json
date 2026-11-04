@@ -6,5 +6,10 @@
     "workstation": "your laptop",
     "git_server": "the Git server",
     "controller_path": "/srv/iac"
+  },
+  "links": {
+    "name": "GitHub",
+    "view": "https://github.com/JBelliriGenty/Cairn-IaC/blob/main/example/{file}#L{line}",
+    "edit": "https://github.com/JBelliriGenty/Cairn-IaC/edit/main/example/{file}"
   }
 }

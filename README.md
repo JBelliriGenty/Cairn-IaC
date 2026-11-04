@@ -81,6 +81,7 @@ Every key is optional; paths are relative to the config file.
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
+| `links` | `{name, view, edit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}` |
 
 `workflow` keys: `example` (machine shown first), `workstation` (where Tofu
 runs), `tofu` (command, `tofu`; a wrapper such as `./tofu.sh` works),
@@ -98,6 +99,22 @@ controller's name), `controller_path` (its clone), `ansible`
                "controller": "ansible01", "controller_path": "/srv/iac"}
 }
 ```
+
+### Editing from the page
+
+The page stays read-only: with `links`, every Tofu block, firewall, role,
+playbook and the inventory get a link to your Git web UI, where the change
+is made and committed under your own account. Then plan/apply or run the
+playbook as the change path shows. Forgejo / Gitea:
+
+```json
+"links": {"name": "Forgejo",
+          "view": "https://git.example/me/iac/src/branch/main/{file}#L{line}",
+          "edit": "https://git.example/me/iac/_edit/main/{file}"}
+```
+
+GitHub: `…/blob/main/{file}#L{line}` and `…/edit/main/{file}`; GitLab:
+`…/-/blob/main/{file}#L{line}` and `…/-/edit/main/{file}`.
 
 ## Translations
 

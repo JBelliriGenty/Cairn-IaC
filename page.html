@@ -173,6 +173,8 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; overflow-x: auto; border-radius:
 .role summary code { font-size: 13px; color: var(--ans-ink); }
 .role[open] summary { margin-bottom: 8px; }
 .role ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 2px; }
+.role .chips, .layer > .chips { margin-top: 8px; }
+.layer .sub a { color: var(--accent); }
 .role .sub { white-space: pre-line; margin: 0 0 8px; }
 .empty { color: var(--muted); margin: 0; }
 </style>
@@ -284,6 +286,8 @@ const FR = {
   "Role": "Rôle", "Tasks": "Tâches", "None, or included by another role": "Aucune, ou rôle inclus par un autre rôle",
   "{n} guest": "{n} invité", "{n} guests": "{n} invités", "physical": "physiques", "Outside the cluster": "Hors cluster",
   "Other": "Autres",
+  "View in {name}": "Voir dans {name}", "Edit in {name}": "Modifier dans {name}",
+  "Edit the inventory": "Modifier l'inventaire", "Edit the tasks": "Modifier les tâches",
   "GB": "Go", "GiB": "Gio", "MiB": "Mio",
 };
 const DICT = {fr: FR};
@@ -377,6 +381,12 @@ function hcl(src) {
 const mem = mb => !mb ? "—" : mb >= 1024 ? `${(mb / 1024).toLocaleString(locale)} ${t("GiB")}` : `${mb} ${t("MiB")}`;
 const disk = gb => gb ? `${gb} ${t("GB")}` : "—";
 const pickPb = m => m.pbs.find(p => key(p) === m.key) || m.pbs.find(p => !D.generic_playbooks.includes(p)) || m.pbs[0];
+// Links to the Git web UI: links.view / links.edit are URL templates with {file} and {line}.
+const L = D.links || {}, P = D.paths;
+const url = (tpl, file, line) => tpl.replace("{file}", file.split("/").map(encodeURIComponent).join("/")).replace("{line}", line || 1);
+const links = (file, line) => [L.view && `<a class="chip" href="${esc(url(L.view, file, line))}" target="_blank" rel="noopener">${esc(t("View in {name}", {name: L.name || "Git"}))}</a>`,
+  L.edit && `<a class="chip" href="${esc(url(L.edit, file, line))}" target="_blank" rel="noopener">${esc(t("Edit in {name}", {name: L.name || "Git"}))}</a>`].filter(Boolean).join("");
+const linkRow = (file, line) => (L.view || L.edit) ? `<div class="chips">${links(file, line)}</div>` : "";
 const step = (html, cmd) => `<li><div>${html}${cmd ? `<code class="cmd">${esc(cmd)}</code>` : ""}</div></li>`;
 
 function renderFlow(m) {
@@ -415,20 +425,21 @@ function renderDetail(m) {
       <div class="stat"><span>${t("Memory")}</span><b>${mem(+tf.memory)}</b></div>
       <div class="stat"><span>${t("Disk")}</span><b>${disk(tf.disk)}</b></div>
       <div class="stat"><span>${t("Tofu address")}</span><b class="mono">${esc(tf.address)}</b></div></div>
-      <details><summary>${esc(t("Show the code ({file}, line {line})", {file: tf.file, line: tf.line}))}</summary><pre class="code">${hcl(tf.code)}</pre></details>`
+      <details><summary>${esc(t("Show the code ({file}, line {line})", {file: tf.file, line: tf.line}))}</summary><pre class="code">${hcl(tf.code)}</pre></details>${linkRow(tf.file, tf.line)}`
     : `<p class="empty">${t(m.phys ? "Physical machine: no Tofu file creates it." : "Not described by Tofu.")}</p>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("Firewall")}</h3><span class="pill t">tofu</span></div>`;
   h += m.fw && m.fw.rules.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Direction")}</th><th>${t("Port")}</th><th>${t("From / to")}</th><th>${t("Why")}</th></tr></thead><tbody>${m.fw.rules.map(r =>
-      `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td></tr>`).join("")}</tbody></table></div>`
+      `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td></tr>`).join("")}</tbody></table></div>${linkRow(m.fw.file, m.fw.line)}`
     : `<p class="empty">${t(m.fw ? "Firewall declared without rules of its own." : "No guest firewall in the repository.")}</p>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("The content")}</h3><span class="pill a">ansible</span></div>`;
   if (m.roles.length) {
     h += `<div class="pills">${(hostGroups[m.key] || []).map(g => `<span class="pill" title="${t("Inventory group")}">${esc(g)}</span>`).join("")}</div>
     <div class="roles">${m.roles.map(r => {
       const R = D.roles[r] || {tasks: [], about: "", templates: []};
-      return `<details class="role"><summary><code>${esc(r)}</code><span class="label">${tp(R.tasks.length, "{n} task", "{n} tasks")}</span></summary>${R.about ? `<p class="sub">${esc(R.about)}</p>` : ""}<ol>${R.tasks.map(x => `<li>${esc(x)}</li>`).join("")}</ol>${R.templates.length ? `<p class="sub">${esc(t("Files rendered from: {list}", {list: R.templates.join(", ")}))}</p>` : ""}</details>`;
+      return `<details class="role"><summary><code>${esc(r)}</code><span class="label">${tp(R.tasks.length, "{n} task", "{n} tasks")}</span></summary>${R.about ? `<p class="sub">${esc(R.about)}</p>` : ""}<ol>${R.tasks.map(x => `<li>${esc(x)}</li>`).join("")}</ol>${R.templates.length ? `<p class="sub">${esc(t("Files rendered from: {list}", {list: R.templates.join(", ")}))}</p>` : ""}${L.edit ? `<div class="chips"><a class="chip" href="${esc(url(L.edit, `${P.roles}/${r}/tasks/main.yml`))}" target="_blank" rel="noopener">${esc(t("Edit the tasks"))}</a></div>` : ""}</details>`;
     }).join("")}</div>
-    <p class="sub">${esc(t("Playbooks targeting it: {list}", {list: m.pbs.map(p => p + ".yml").join(", ")}))}</p>`;
+    <p class="sub">${t("Playbooks targeting it: {list}", {list: m.pbs.map(p => L.view ? `<a href="${esc(url(L.view, `${P.playbooks}/${p}.yml`))}" target="_blank" rel="noopener">${esc(p)}.yml</a>` : esc(p + ".yml")).join(", ")})}</p>
+    ${L.edit ? `<div class="chips"><a class="chip" href="${esc(url(L.edit, P.inventory))}" target="_blank" rel="noopener">${esc(t("Edit the inventory"))}</a></div>` : ""}`;
   } else h += `<p class="empty">${t(m.host ? "In the inventory, but no playbook gives it a role." : "Not in the Ansible inventory.")}</p>`;
   $("#detail").innerHTML = h + `</section>`;
 }
