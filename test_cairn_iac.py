@@ -103,4 +103,19 @@ with tempfile.TemporaryDirectory() as tmp:
     assert out["ok"] and not out["pushed"]
     assert git("log", "-1", "--format=%an <%ae>|%cn|%s").strip() == "Ada Lovelace <ada@example.org>|Cairn IaC|web: cores 2 -> 3"
     assert "moved" in refused(app.edit, Req, "ada", op, False)
+
+    # remote modes: "branch" pushes a new branch and leaves the remote branch (and the clone) as they were
+    bare = pathlib.Path(tmp) / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(bare)], check=True)
+    data2 = pathlib.Path(tmp) / "data2"
+    app2 = ci.App({**cfg, "data_dir": str(data2), "base": repo, "git": {**cfg["git"], "url": bare.as_posix(), "mode": "branch"}})
+    app2.proxies = ["x"]
+    page = app2.page("ada")
+    rev = json.loads(page.split("const D = ")[1].split(";\n")[0])["server"]["rev"]
+    out = app2.edit(Req, "ada", {**op, "cores": 5, "rev": rev}, True)
+    assert out["mode"] == "branch" and out["ref"].startswith("cairn-iac/ada-"), out
+    bgit = lambda *a: subprocess.run(["git", "-C", str(bare), *a], check=True, capture_output=True, text=True).stdout.strip()
+    assert bgit("rev-parse", "main") == rev and bgit("log", "-1", "--format=%s", out["ref"]) == "web: cores 3 -> 5"
+    assert app2.head(data2 / "repo") == rev
+    assert "mode" in refused(app2.put_settings, {"git": {**cfg["git"], "mode": "nope"}})
 print("ok")

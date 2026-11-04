@@ -161,7 +161,7 @@ Who may use it is set in the config file only, never from the page:
 | `require_groups` | at least one of these groups (empty: any signed-in user) |
 | `read_only` | page and Settings without editing (`false`) |
 | `firewall_lists` | `{in, out}`: list names that receive new rules in a firewall module (`inbound_rules`, `outbound_rules`) |
-| `git` | `{url, branch, push, name, email, commit_prefix}`: remote, branch (`main`), push after each commit (`true`), committer identity |
+| `git` | `{url, branch, push, mode, name, email, commit_prefix}`: remote, branch (`main`), push after each commit (`true`), `mode`: `push` onto the branch, `agit` (Forgejo/Gitea: `refs/for/<branch>` opens a pull request, no API token), `branch` (a new branch per edit, open the pull request yourself); committer identity |
 
 ```json
 {

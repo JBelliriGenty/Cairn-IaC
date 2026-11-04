@@ -336,6 +336,17 @@ const FR = {
   "Edit the inventory": "Modifier l'inventaire", "Edit the tasks": "Modifier les tâches",
   "GB": "Go", "GiB": "Gio", "MiB": "Mio",
   // server mode: forms, settings, refusals sent by the server
+  "Commit {sha} sent as a pull request ({ref}). Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} envoyé en demande de fusion ({ref}). Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
+  "Commit {sha} pushed on the branch {ref}: open its pull request. Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} poussé sur la branche {ref} : ouvrez sa demande de fusion. Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
+  "Open the pull request": "Ouvrir la demande de fusion",
+  "Close": "Fermer",
+  "How an edit reaches the branch": "Comment une modification arrive sur la branche",
+  "Pushed onto the branch": "Poussée directement sur la branche",
+  "Pull request opened by the push (Forgejo, Gitea: AGit)": "Demande de fusion ouverte par le push (Forgejo, Gitea : AGit)",
+  "Pushed onto a new branch, pull request opened by hand": "Poussée sur une nouvelle branche, demande de fusion ouverte à la main",
+  "Commit and open a pull request": "Committer et ouvrir la demande de fusion",
+  "Commit and push a branch": "Committer et pousser une branche",
+  "Authored by {user}, as a pull request to {branch}.": "Commit à votre nom ({user}), en demande de fusion vers {branch}.",
   "Settings": "Réglages",
   "Review the change": "Relire la modification",
   "Commit message": "Message du commit",
@@ -651,7 +662,7 @@ async function preview(op, where) {
     $("#rv-diff").innerHTML = p.diff.split("\n").map(l => `<span class="${l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : ""}">${esc(l)}</span>`).join("\n");
     $("#rv-msg").value = p.message;
     $("#rv-err").textContent = "";
-    $("#rv-go").disabled = false;
+    $("#rv-go").disabled = false; $("#rv-err").className = "err"; $("#rv-cancel").textContent = t("Cancel");
     $("#review").showModal();
   } catch (e) {
     where.querySelector(".err")?.remove();
@@ -664,6 +675,13 @@ $("#rv-go").addEventListener("click", async () => {
   try {
     const c = await api("/api/commit", {...pending, message: $("#rv-msg").value});
     $("#rv-err").className = "okmsg";
+    if (c.pushed && c.mode !== "push") {
+      // the edit waits in a pull request: the page stays on the branch as it is, no reload
+      $("#rv-err").innerHTML = esc(t(c.mode === "agit" ? "Commit {sha} sent as a pull request ({ref}). Once merged: plan and apply, or run the playbook, as the path shows." : "Commit {sha} pushed on the branch {ref}: open its pull request. Once merged: plan and apply, or run the playbook, as the path shows.", {sha: c.commit, ref: c.ref}))
+        + (c.link ? ` <a href="${esc(c.link)}" target="_blank" rel="noopener">${esc(t("Open the pull request"))}</a>` : "");
+      $("#rv-cancel").textContent = t("Close");
+      return;
+    }
     $("#rv-err").textContent = t(c.pushed ? "Commit {sha} pushed. Next: plan and apply, or run the playbook, as the path shows." : "Commit {sha} made (not pushed). Next: plan and apply, or run the playbook, as the path shows.", {sha: c.commit});
     setTimeout(() => location.reload(), 2500);
   } catch (e) { $("#rv-err").className = "err"; $("#rv-err").textContent = errText(e); $("#rv-go").disabled = false; }
@@ -695,7 +713,7 @@ const FORM = [
   ["Note on the overview", [["note.title", "Title"], ["note.text", "Text (`code` between backquotes)", "text"]]],
   ["Links to the Git web interface", [["links.name", "Name"], ["links.view", "View URL, with {file} and {line}"], ["links.edit", "Edit URL, with {file}"]]],
   ["Firewall modules", [["firewall_lists.in", "List for incoming rules"], ["firewall_lists.out", "List for outgoing rules"]]],
-  ["Git", [["git.url", "Remote (empty: the local repository, nothing pushed)"], ["git.branch", "Branch"], ["git.push", "Push after each commit", "bool"],
+  ["Git", [["git.url", "Remote (empty: the local repository, nothing pushed)"], ["git.branch", "Branch"], ["git.push", "Push after each commit", "bool"], ["git.mode", "How an edit reaches the branch", "mode"],
     ["git.name", "Committer name"], ["git.email", "Committer email"], ["git.commit_prefix", "Commit message prefix"]]],
 ];
 const getp = (o, p) => p.split(".").reduce((a, k) => a == null ? undefined : a[k], o);
@@ -705,6 +723,7 @@ function renderSettings() {
     const label = t(l, {file: "{file}", line: "{line}"}), v = getp(st, p), id = "s-" + p.replace(".", "-");
     if (type === "bool") return `<label class="check wide"><input type="checkbox" id="${id}" data-p="${p}" data-t="bool"${v ? " checked" : ""}> ${esc(label)}</label>`;
     if (type === "text") return `<label class="wide">${esc(label)}<textarea id="${id}" data-p="${p}">${esc(v)}</textarea></label>`;
+    if (type === "mode") return `<label class="wide">${esc(label)}<select id="${id}" data-p="${p}">${[["push", "Pushed onto the branch"], ["agit", "Pull request opened by the push (Forgejo, Gitea: AGit)"], ["branch", "Pushed onto a new branch, pull request opened by hand"]].map(([k, l]) => `<option value="${k}"${(v || "push") === k ? " selected" : ""}>${esc(t(l))}</option>`).join("")}</select></label>`;
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
     return `<label${/url|text|generic/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
   };
@@ -755,8 +774,9 @@ if (EDIT) {
   document.querySelector('#nav [data-view="settings"]').hidden = false;
   renderSettings();
   const g = S.settings.git;
-  $("#rv-go").textContent = t(g.url && g.push ? "Commit and push" : "Commit");
-  $("#rv-note").textContent = t("Authored by {user}, on the branch {branch}.", {user: S.user, branch: g.url ? g.branch : "HEAD"});
+  const mode = g.url && g.push ? g.mode || "push" : "";
+  $("#rv-go").textContent = t({push: "Commit and push", agit: "Commit and open a pull request", branch: "Commit and push a branch"}[mode] || "Commit");
+  $("#rv-note").textContent = t(mode === "agit" || mode === "branch" ? "Authored by {user}, as a pull request to {branch}." : "Authored by {user}, on the branch {branch}.", {user: S.user, branch: g.url ? g.branch : "HEAD"});
 }
 function show(view) {
   document.querySelectorAll(".view").forEach(s => {

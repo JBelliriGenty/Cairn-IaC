@@ -27,7 +27,9 @@ DEFAULTS = {
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
-    "git": {"url": "", "branch": "main", "push": True, "name": "Cairn IaC", "email": "cairn-iac@localhost", "commit_prefix": ""},
+    # mode: push (to the branch), branch (a new branch per edit, to open a pull request from),
+    # agit (Forgejo/Gitea AGit: refs/for/<branch> opens the pull request itself).
+    "git": {"url": "", "branch": "main", "push": True, "mode": "push", "name": "Cairn IaC", "email": "cairn-iac@localhost", "commit_prefix": ""},
 }
 # Keys the Settings page edits (stored in <data_dir>/settings.json, seeded once from the config).
 SETTINGS = [k for k in DEFAULTS if k != "repo"]
@@ -558,7 +560,7 @@ class App:
     def repo(self, s):
         return self.data / "repo" if s["git"]["url"] else (self.cfg["base"] / self.cfg["repo"]).resolve()
 
-    def git(self, repo, *args, timeout=60):
+    def git(self, repo, *args, timeout=60, output=False):
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         if self.key.exists():
             env["GIT_SSH_COMMAND"] = (f"ssh -i {self.key} -o IdentitiesOnly=yes -o BatchMode=yes "
@@ -566,7 +568,7 @@ class App:
         r = subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, text=True, timeout=timeout)
         if r.returncode:
             raise Refused("git {cmd}: {err}", cmd=args[0], err=(r.stderr or r.stdout).strip()[-400:])
-        return r.stdout.strip()
+        return (r.stdout + r.stderr) if output else r.stdout.strip()
 
     def sync(self, s, force=False):
         """Own clone of the remote, reset to the remote branch at most every 30 s (or now when forced)."""
@@ -659,8 +661,23 @@ class App:
                 self.git(repo, "-c", f"user.name={g['name']}", "-c", f"user.email={g['email']}",
                          "commit", "-q", "--author", self.author(h, user), "-m", text)
                 sha = self.git(repo, "rev-parse", "--short", "HEAD")
+                mode, ref, link = g.get("mode") or "push", g["branch"], ""
                 if g["url"] and g["push"]:
-                    self.git(repo, "push", "-q", "origin", f"HEAD:refs/heads/{g['branch']}", timeout=120)
+                    topic = "cairn-iac/" + re.sub(r"[^A-Za-z0-9_.-]", "-", user)[:40] + time.strftime("-%Y%m%d-%H%M%S")
+                    if mode == "agit":
+                        out = self.git(repo, "push", "origin", f"HEAD:refs/for/{g['branch']}", "-o", f"topic={topic}",
+                                       "-o", "title=" + text.splitlines()[0][:200], timeout=120, output=True)
+                        ref = topic
+                    elif mode == "branch":
+                        out = self.git(repo, "push", "origin", f"HEAD:refs/heads/{topic}", timeout=120, output=True)
+                        ref = topic
+                    else:
+                        out = self.git(repo, "push", "origin", f"HEAD:refs/heads/{g['branch']}", timeout=120, output=True)
+                    # The Git server often prints the pull request (or "create one") link.
+                    m = re.search(r"https?://\S+", out)
+                    link = m.group(0) if m and mode != "push" else ""
+                    if mode != "push":  # the edit waits in its pull request: back to the branch as it is
+                        self.sync(s, force=True)
             except (Refused, subprocess.TimeoutExpired):
                 # Nothing half done stays: back to the remote state (or the last commit, without a remote).
                 if g["url"]:
@@ -668,7 +685,7 @@ class App:
                 else:
                     self.git(repo, "checkout", "-q", "--", rel)
                 raise
-            return {"ok": True, "commit": sha, "pushed": bool(g["url"] and g["push"])}
+            return {"ok": True, "commit": sha, "pushed": bool(g["url"] and g["push"]), "mode": mode, "ref": ref, "link": link}
 
     def put_settings(self, new):
         if self.cfg["read_only"]:
@@ -691,6 +708,8 @@ class App:
         g = out["git"] = {**DEFAULTS["git"], **out["git"]}
         if g["url"].startswith("-") or not re.fullmatch(r"[A-Za-z0-9._/-]+", g["branch"]) or g["branch"].startswith("-"):
             raise Refused("Invalid {what}: {value}", what="git", value=(g["url"] or g["branch"])[:80])
+        if g.get("mode") not in ("push", "branch", "agit"):
+            raise Refused("Invalid {what}: {value}", what="git mode", value=str(g.get("mode"))[:20])
         for k in ("name", "email"):
             if not g[k] or re.search(r"[<>\n]", g[k]):
                 raise Refused("Invalid {what}: {value}", what=f"git {k}", value=g[k][:40])
