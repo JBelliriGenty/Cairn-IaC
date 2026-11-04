@@ -1,0 +1,8 @@
+# Packages and settings every machine gets.
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [curl, vim]
+
+- name: Set the timezone
+  community.general.timezone:
+    name: Europe/Paris

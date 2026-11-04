@@ -1,0 +1,9 @@
+- name: Base
+  hosts: all
+  roles:
+    - base
+
+- name: Web server
+  hosts: web
+  roles:
+    - web

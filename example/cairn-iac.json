@@ -1,0 +1,10 @@
+{
+  "repo": ".",
+  "title": "Example lab",
+  "subtitle": "example/",
+  "workflow": {
+    "workstation": "your laptop",
+    "git_server": "the Git server",
+    "controller_path": "/srv/iac"
+  }
+}

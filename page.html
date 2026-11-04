@@ -1,0 +1,486 @@
+<title>Cairn IaC</title>
+<style>
+/* Cairn design system (github.com/JBelliriGenty/Cairn-NAS, DESIGN.md): tokens and components copied as is,
+   then this page's own parts. One hue per measure: Tofu = teal (--c-pool), Ansible = pink (--c-temp);
+   green/amber/red are kept for states. */
+:root {
+  --bg: #eef1f8; --panel: #ffffff; --fg: #131416; --muted: #5d5f60; --line: #e5e8ef; --control: #8b909a;
+  --track: #eceff5; --primary: #1d1f20; --on-primary: #ffffff; --accent: #4f46e5;
+  --c-pool: #0d9488; --c-temp: #db2777; --pool-ink: #0f766e; --temp-ink: #be185d;
+  --ok: #1e7b4f; --ok-bg: #dcfae5; --ok-ink: #04250e;
+  --radius: 8px; --radius-sheet: 16px;
+  --duration-stagger: 40ms; --duration-slow: 400ms; --distance-base: 8px; --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --tofu: var(--c-pool); --tofu-ink: var(--pool-ink); --ans: var(--c-temp); --ans-ink: var(--temp-ink);
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
+  --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
+  --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
+  --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
+    --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
+    --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
+    --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+
+/* layout */
+.app { display: grid; grid-template-columns: 228px 1fr; min-height: 100vh; }
+.side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 18px; padding: 18px 12px; background: var(--bg); }
+.brand { display: flex; gap: 10px; align-items: center; padding: 0 8px; }
+.brand b { display: block; font-size: 16px; }
+.brand small { color: var(--muted); font-size: 12px; }
+.logo { width: 30px; height: 30px; }
+#nav { display: flex; flex-direction: column; gap: 2px; }
+#nav button { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 0; border-radius: 8px; background: none;
+  cursor: pointer; text-align: left; color: var(--muted); transition: background .15s, color .15s; }
+#nav button:hover { background: var(--track); color: var(--fg); }
+#nav button[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); color: var(--accent); font-weight: 600; }
+#nav svg { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding: 0 8px; }
+.legend { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.legend-item { display: flex; align-items: center; gap: 8px; }
+main { padding: 24px 24px 40px; min-width: 0; background: var(--panel); margin: 8px 8px 8px 0;
+  border: 1px solid var(--line); border-radius: var(--radius-sheet); min-height: calc(100vh - 16px); }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 22px; font-weight: 600; }
+h2 { font-size: 16px; font-weight: 600; margin: 24px 0 10px; }
+h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.meta, .sub { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+.verdict { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; padding: 12px 16px; border-radius: var(--radius); font-size: 18px; font-weight: 600;
+  background: var(--track); border: 1px solid var(--line); }
+@media (max-width: 820px) {
+  .app { grid-template-columns: minmax(0, 1fr); align-content: start; }
+  .side { display: contents; }
+  .brand { padding: 12px 16px 4px; }
+  #nav { position: sticky; top: 0; z-index: 5; flex-direction: row; overflow-x: auto; scrollbar-width: none; padding: 6px 12px;
+    background: var(--bg); border-bottom: 1px solid var(--line); }
+  #nav button { white-space: nowrap; }
+  .side-foot { order: 1; flex-direction: row; flex-wrap: wrap; align-items: center; margin: 0; padding: 16px; }
+  .legend { flex-direction: row; flex-wrap: wrap; gap: 10px; }
+  main { padding: 16px; margin: 0; border: 0; border-radius: 0; min-height: 0; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(var(--distance-base)) scale(.985); } to { opacity: 1; transform: none; } }
+.view.enter .card { animation: rise var(--duration-slow) var(--ease-smooth-out) both; }
+.view.enter .card:nth-child(2) { animation-delay: var(--duration-stagger); }
+.view.enter .card:nth-child(n+3) { animation-delay: calc(2 * var(--duration-stagger)); }
+@media (prefers-reduced-motion: reduce) { .view.enter .card { animation: none; } * { transition: none !important; } }
+
+/* cards, stats, pills, chips, tables, buttons */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.grid { display: grid; gap: 14px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.label { color: var(--muted); font-size: 12px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.stat { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 8px; background: var(--track); min-width: 0; }
+.stat span { color: var(--muted); font-size: 12px; }
+.stat b { font-size: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; background: var(--track); white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--track); cursor: pointer; font-size: 14px; }
+a.chip { text-decoration: none; color: inherit; }
+.chip:hover { border-color: var(--control); }
+details { margin-top: 0; }
+summary { cursor: pointer; color: var(--accent); user-select: none; }
+.table-wrap { padding: 0; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+td.wrap { white-space: normal; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 820px) {
+  .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td { display: block; }
+  .table-wrap thead { display: none; }
+  .table-wrap tr { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .table-wrap tr:last-child { border-bottom: 0; }
+  .table-wrap td { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; border: 0; white-space: normal; text-align: right; }
+  .table-wrap td:first-child { text-align: left; }
+  .table-wrap td[data-label]:not(:first-child)::before { content: attr(data-label); color: var(--muted); font-size: 12px; text-align: left; }
+}
+button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--control); background: var(--panel); cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.ghost { background: none; }
+button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px; background: var(--panel); max-width: 100%; }
+.toolbar { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.mono, code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.sw { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
+.sw.t { background: var(--tofu); } .sw.a { background: var(--ans); }
+
+/* ---------- cairn-iac ---------- */
+.lead { color: var(--muted); max-width: 70ch; margin: 0 0 16px; }
+.flows { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.flow { display: flex; flex-direction: column; gap: 12px; min-width: 0; border-top: 3px solid var(--line); }
+.flow.t { border-top-color: var(--tofu); } .flow.a { border-top-color: var(--ans); }
+.flow .who { font-size: 12px; }
+.flow.t .who { color: var(--tofu-ink); } .flow.a .who { color: var(--ans-ink); }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.steps li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; position: relative; padding-bottom: 12px; }
+.steps li::before { content: ""; width: 9px; height: 9px; border-radius: 50%; margin: 5px 0 0 5px; background: var(--panel); border: 2px solid var(--c); }
+.steps li:not(:last-child)::after { content: ""; position: absolute; left: 10px; top: 17px; bottom: 0; width: 1px; background: var(--line); }
+.flow.t .steps { --c: var(--tofu); } .flow.a .steps { --c: var(--ans); }
+.cmd { display: block; overflow-x: auto; white-space: nowrap; background: var(--track); border-radius: 6px; padding: 5px 10px; margin-top: 4px; }
+
+.park { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .park { grid-template-columns: 1fr; } }
+.nodes { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); align-items: start; }
+.node { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--track); border: 0; }
+.node-h { display: flex; justify-content: space-between; gap: 8px; padding: 0 2px 2px; }
+.node-h b { font-size: 14px; }
+.m { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; text-align: left; border-color: var(--line); padding: 7px 10px; transition: border-color .15s, background .15s, opacity .15s; }
+.m.phys { border-left: 3px solid var(--muted); }
+.m b { font-weight: 600; }
+.m .label { grid-column: 1; font-variant-numeric: tabular-nums; }
+.m .marks { grid-column: 2; grid-row: 1 / 3; display: flex; gap: 3px; align-self: center; }
+.m[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.nodes.filtering .m:not(.match) { opacity: .35; }
+.nodes.filtering .m.match { border-color: var(--accent); }
+
+.detail { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 18px; min-width: 0; max-height: calc(100vh - 48px); overflow: auto; }
+@media (max-width: 1100px) { .detail { position: static; max-height: none; } }
+.layer { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.layer > .row h3 { margin-right: auto; }
+.pill.t { background: color-mix(in srgb, var(--tofu) 14%, var(--panel)); color: var(--tofu-ink); }
+.pill.a { background: color-mix(in srgb, var(--ans) 14%, var(--panel)); color: var(--ans-ink); }
+pre.code { margin: 8px 0 0; padding: 10px 12px; overflow-x: auto; border-radius: 6px; background: var(--track); font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.c-com { color: var(--muted); } .c-str { color: var(--tofu-ink); } .c-key { color: var(--accent); }
+.detail .table-wrap { border: 1px solid var(--line); border-radius: var(--radius); }
+.detail table, .detail tbody, .detail tr, .detail td { display: block; }
+.detail thead { display: none; }
+.detail tr { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.detail tr:last-child { border-bottom: 0; }
+.detail td { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; border: 0; white-space: normal; text-align: right; }
+.detail td:first-child { font-weight: 600; text-align: left; }
+.detail td[data-label]:not(:first-child)::before { content: attr(data-label); color: var(--muted); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; text-align: left; flex: none; }
+.roles { display: flex; flex-direction: column; gap: 6px; }
+.role { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; }
+.role summary { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); }
+.role summary code { font-size: 13px; color: var(--ans-ink); }
+.role[open] summary { margin-bottom: 8px; }
+.role ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 2px; }
+.role .sub { white-space: pre-line; margin: 0 0 8px; }
+.empty { color: var(--muted); margin: 0; }
+</style>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#4f46e5"/><ellipse cx="16" cy="26.4" rx="10" ry="2.8" fill="#a5b4fc"/><ellipse cx="16" cy="24.8" rx="10" ry="2.8" fill="#fff"/><ellipse cx="16" cy="18.9" rx="7.5" ry="2.3" fill="#a5b4fc"/><ellipse cx="16" cy="17.4" rx="7.5" ry="2.3" fill="#fff"/><ellipse cx="16" cy="11.9" rx="5" ry="1.9" fill="#a5b4fc"/><ellipse cx="16" cy="10.5" rx="5" ry="1.9" fill="#fff"/></svg>
+      <div><b id="title"></b><small id="subtitle"></small></div>
+    </div>
+    <nav id="nav">
+      <button data-view="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n>Overview</span></button>
+      <button data-view="machines"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg><span data-i18n>Machines</span></button>
+      <button data-view="roles"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span data-i18n>Roles</span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="legend">
+        <span class="legend-item"><i class="sw t"></i>Tofu</span>
+        <span class="legend-item"><i class="sw a"></i>Ansible</span>
+      </div>
+      <button class="ghost" id="theme"></button>
+      <button class="ghost" id="lang"></button>
+    </div>
+  </aside>
+
+  <main>
+    <header class="top">
+      <div><h1 id="view-title"></h1><p class="meta" id="meta"></p></div>
+    </header>
+
+    <section class="view" data-view="overview">
+      <p class="verdict" id="verdict"></p>
+      <p class="lead" id="lead"></p>
+      <div class="grid flows">
+        <article class="card flow t"><div><span class="who">tofu</span><h3 data-i18n>The box exists</h3></div><ol class="steps" id="flow-tofu"></ol></article>
+        <article class="card flow a"><div><span class="who">ansible</span><h3 data-i18n>The box is filled</h3></div><ol class="steps" id="flow-ans"></ol></article>
+      </div>
+      <div id="note"></div>
+    </section>
+
+    <section class="view" data-view="machines" hidden>
+      <div class="toolbar">
+        <label class="row" for="rolefilter"><span class="label" data-i18n>Highlight the role</span>
+          <select id="rolefilter"><option value="" data-i18n>None</option></select></label>
+        <span class="label" data-i18n>Thick left edge: physical machine</span>
+      </div>
+      <div class="park">
+        <div class="grid nodes" id="nodes"></div>
+        <aside class="card detail" id="detail" aria-live="polite"></aside>
+      </div>
+    </section>
+
+    <section class="view" data-view="roles" hidden>
+      <div class="card table-wrap"><table id="roles"></table></div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+const D = /*DATA*/null;
+
+// ---------- i18n: the code is in English; each table maps English source strings to a language ----------
+// Add a language: copy FR, translate the values, add it to DICT and LANGS.
+const FR = {
+  "Overview": "Vue d'ensemble", "Machines": "Parc", "Roles": "Rôles", "None": "Aucun",
+  "The box exists": "La boîte existe", "The box is filled": "La boîte est remplie",
+  "Highlight the role": "Surligner le rôle", "Thick left edge: physical machine": "Trait épais à gauche : machine physique",
+  "Theme: {name}": "Thème : {name}", "auto": "auto", "light": "clair", "dark": "sombre", "Language: {name}": "Langue : {name}",
+  "Read from the repository{rev}": "Lu dans le dépôt{rev}",
+  "{n} machine described by Tofu": "{n} machine décrite par Tofu", "{n} machines described by Tofu": "{n} machines décrites par Tofu",
+  "{n} configured by Ansible": "{n} configurée par Ansible", "{n} configured by Ansible#pl": "{n} configurées par Ansible",
+  "{n} guest firewall": "{n} pare-feu invité", "{n} guest firewalls": "{n} pare-feux invités",
+  "OpenTofu builds the box: processor, memory, disk, IP address, firewall. Ansible fills it: packages, containers, configuration. The path below follows {name}; it changes with the machine picked in Machines.":
+    "OpenTofu construit la boîte : processeur, mémoire, disque, adresse IP, pare-feu. Ansible la remplit : paquets, conteneurs, configuration. Le trajet ci-dessous suit {name} ; il change avec la machine choisie dans Parc.",
+  "your workstation": "votre poste",
+  "On {ws}, edit the {addr} block in {file}, line {line}.": "Sur {ws}, on modifie le bloc {addr} dans {file}, ligne {line}.",
+  "Compute the difference with reality, for this machine only:": "On calcule la différence avec la réalité, pour cette machine seulement :",
+  "{who} reviews the plan and applies it:": "{who} relit le plan et l'applique :",
+  "Review the plan, then apply it:": "On relit le plan, puis on l'applique :",
+  "OpenTofu calls the Proxmox API on {node}: {kind} {id}, {cores} vCPU, {mem}, {disk}, IP {ip}.": "OpenTofu parle à l'API Proxmox de {node} : {kind} {id}, {cores} vCPU, {mem}, {disk}, IP {ip}.",
+  "The guest firewall ({file}) only opens the {n} declared flow.": "Le pare-feu invité ({file}) n'ouvre que le flux déclaré.",
+  "The guest firewall ({file}) only opens the {n} declared flows.": "Le pare-feu invité ({file}) n'ouvre que les {n} flux déclarés.",
+  "{name} is not created by Tofu: it is a physical machine, installed by hand.": "{name} n'est pas créée par Tofu : c'est une machine physique, installée à la main.",
+  "{name} is not created by Tofu: it predates the repository.": "{name} n'est pas créée par Tofu : elle existait avant le dépôt.",
+  "Tofu still manages its firewall: {n} flows in {file}.": "Tofu gère quand même son pare-feu : {n} flux dans {file}.",
+  "Edit a role or {file}, then:": "On modifie un rôle ou {file}, puis :",
+  "The commit reaches {git}.": "Le commit arrive sur {git}.",
+  "{ctl}, the Ansible controller, pulls the latest version:": "{ctl}, le contrôleur Ansible, récupère la dernière version :",
+  "On the Ansible controller, pull the latest version:": "Sur le contrôleur Ansible, on récupère la dernière version :",
+  "Run the playbook, as a dry run first:": "On lance le playbook, en simulation d'abord :",
+  "Ansible connects over SSH to {host} and applies {roles}, task by task; a task already in the right state changes nothing.":
+    "Ansible ouvre une session SSH sur {host} et applique {roles}, tâche par tâche ; une tâche déjà conforme ne change rien.",
+  "{n} role": "{n} rôle", "{n} roles": "{n} rôles",
+  "No playbook targets {name}: Ansible does not configure it.": "Aucun playbook ne cible {name} : Ansible ne la configure pas.",
+  "Physical machine": "Machine physique", "Guest": "Invité", " on {node}": " sur {node}", "no IP declared": "IP non déclarée",
+  "The box": "La boîte", "Memory": "Mémoire", "Disk": "Disque", "Tofu address": "Adresse Tofu",
+  "Show the code ({file}, line {line})": "Voir le code ({file}, ligne {line})",
+  "Physical machine: no Tofu file creates it.": "Machine physique : aucun fichier Tofu ne la crée.",
+  "Not described by Tofu.": "Tofu ne la décrit pas.",
+  "Firewall": "Pare-feu", "Direction": "Sens", "Port": "Port", "From / to": "Depuis / vers", "Why": "Pourquoi",
+  "In": "Entrée", "Out": "Sortie", "anywhere": "partout",
+  "Firewall declared without rules of its own.": "Pare-feu déclaré sans règle propre.",
+  "No guest firewall in the repository.": "Aucun pare-feu invité dans le dépôt.",
+  "The content": "Le contenu", "Inventory group": "Groupe d'inventaire",
+  "{n} task": "{n} tâche", "{n} tasks": "{n} tâches", "Files rendered from: {list}": "Fichiers générés depuis : {list}",
+  "Playbooks targeting it: {list}": "Playbooks qui la ciblent : {list}",
+  "In the inventory, but no playbook gives it a role.": "Dans l'inventaire, mais aucun playbook ne lui applique de rôle.",
+  "Not in the Ansible inventory.": "Absente de l'inventaire Ansible.",
+  "Role": "Rôle", "Tasks": "Tâches", "None, or included by another role": "Aucune, ou rôle inclus par un autre rôle",
+  "{n} guest": "{n} invité", "{n} guests": "{n} invités", "physical": "physiques", "Outside the cluster": "Hors cluster",
+  "Other": "Autres",
+  "GB": "Go", "GiB": "Gio", "MiB": "Mio",
+};
+const DICT = {fr: FR};
+const LANGS = {en: {name: "English", locale: "en-GB"}, fr: {name: "Français", locale: "fr-FR"}};
+let lang = "en";
+try { lang = localStorage.getItem("cairn-iac-lang") || ""; } catch {}
+if (!LANGS[lang]) lang = LANGS[D.lang] ? D.lang : Object.keys(LANGS).find(l => (navigator.language || "").startsWith(l)) || "en";
+document.documentElement.lang = lang;
+const T = DICT[lang] || {};
+const t = (s, v = {}) => (T[s] || s).replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
+// English and French plurals differ at 0 (en: 0 tasks, fr: 0 tâche).
+// Plural by the language's own rule (en: 0 tasks, fr: 0 tâche). A plural that English spells
+// like its singular is keyed "<string>#pl" in the other languages' tables.
+const plural = new Intl.PluralRules(lang);
+const tp = (n, one, many, v = {}) => {
+  const pl = plural.select(n) !== "one", k = pl ? many : one;
+  return t(pl && T[k + "#pl"] ? k + "#pl" : k, {n, ...v});
+};
+const locale = LANGS[lang].locale;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const code = s => `<code>${esc(s)}</code>`;
+const key = s => String(s).toLowerCase().replace(/_/g, "-");
+
+// ---------- model: one entry per machine, merged from Tofu, firewalls and the inventory ----------
+const M = {};
+const nodeKeys = D.nodes.map(key), bareKeys = D.bare.map(key);
+for (const m of D.tofu) { const k = key(m.name); M[k] = {key: k, name: m.name.toUpperCase(), tofu: m, id: m.id, node: m.node && key(m.node), ip: m.ip || D.ips[k] || ""}; }
+const byId = Object.fromEntries(Object.values(M).filter(m => m.id != null).map(m => [String(m.id), m]));
+for (const [id, fw] of Object.entries(D.firewalls)) {
+  const m = byId[id] || M[key(fw.name)] || (M[key(fw.name)] = {key: key(fw.name), name: fw.name.toUpperCase(), id: +id, node: fw.node && key(fw.node), ip: ""});
+  m.fw = fw; m.id ??= +id; m.node ??= fw.node && key(fw.node);
+}
+for (const [h, ip] of Object.entries(D.ips)) { const k = key(h); (M[k] ||= {key: k, name: h.toUpperCase(), ip}).ip ||= ip; M[k].host = h; }
+const hostRoles = {}, hostPbs = {}, hostGroups = {};
+for (const [pb, plays] of Object.entries(D.playbooks)) for (const p of plays) for (const h of p.hosts) {
+  (hostPbs[key(h)] ||= new Set()).add(pb);
+  for (const r of p.roles) (hostRoles[key(h)] ||= new Set()).add(r);
+}
+for (const [g, hs] of Object.entries(D.groups)) for (const h of hs) (hostGroups[key(h)] ||= []).push(g);
+for (const m of Object.values(M)) {
+  m.phys = nodeKeys.includes(m.key) || bareKeys.includes(m.key);
+  m.roles = [...(hostRoles[m.key] || [])].sort();
+  m.pbs = [...(hostPbs[m.key] || [])].sort();
+}
+const roleUse = {};
+for (const m of Object.values(M)) for (const r of m.roles) (roleUse[r] ||= []).push(m.key);
+
+// ---------- frame ----------
+$("#title").textContent = D.title;
+$("#subtitle").textContent = D.subtitle;
+document.querySelectorAll("[data-i18n]").forEach(e => e.textContent = t(e.textContent));
+$("#meta").textContent = t("Read from the repository{rev}", {rev: D.rev ? ` · ${D.rev}` : ""});
+const nAns = Object.values(M).filter(m => m.roles.length).length, nFw = Object.keys(D.firewalls).length;
+$("#verdict").textContent = [tp(D.tofu.length, "{n} machine described by Tofu", "{n} machines described by Tofu"),
+  tp(nAns, "{n} configured by Ansible", "{n} configured by Ansible"), tp(nFw, "{n} guest firewall", "{n} guest firewalls")].join(", ");
+if (D.note && D.note.text) $("#note").innerHTML = `<h2>${esc(D.note.title || "")}</h2><article class="card"><p class="empty">${esc(D.note.text).replace(/`([^`]+)`/g, "<code>$1</code>")}</p></article>`;
+
+// ---------- machines map ----------
+const tile = m => `<button class="m${m.phys ? " phys" : ""}" data-k="${m.key}" aria-pressed="false"><b>${esc(m.name)}</b><span class="label">${esc(m.ip || (m.id != null ? "id " + m.id : ""))}</span><span class="marks">${m.tofu || m.fw ? '<i class="sw t" title="Tofu"></i>' : ""}${m.roles.length ? '<i class="sw a" title="Ansible"></i>' : ""}</span></button>`;
+const colNodes = [...new Set([...nodeKeys, ...Object.values(M).map(m => m.node).filter(Boolean)])];
+const placed = new Set();
+let cols = colNodes.map(n => {
+  const guests = Object.values(M).filter(m => m.node === n && !m.phys).sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+  const list = [M[n], ...guests].filter(Boolean);
+  list.forEach(m => placed.add(m.key));
+  return `<div class="card node"><div class="node-h"><b>${esc(n.toUpperCase())}</b><span class="label">${tp(guests.length, "{n} guest", "{n} guests")}</span></div>${list.map(tile).join("")}</div>`;
+});
+const bare = bareKeys.map(k => M[k]).filter(m => m && !placed.has(m.key));
+bare.forEach(m => placed.add(m.key));
+if (bare.length) cols.push(`<div class="card node"><div class="node-h"><b>${t("Outside the cluster")}</b><span class="label">${t("physical")}</span></div>${bare.map(tile).join("")}</div>`);
+const rest = Object.values(M).filter(m => !placed.has(m.key)).sort((a, b) => a.key.localeCompare(b.key));
+if (rest.length) cols.push(`<div class="card node"><div class="node-h"><b>${t("Other")}</b><span class="label">${rest.length}</span></div>${rest.map(tile).join("")}</div>`);
+$("#nodes").innerHTML = cols.join("");
+
+$("#rolefilter").innerHTML += Object.keys(D.roles).sort().map(r => `<option value="${esc(r)}">${esc(r)} (${(roleUse[r] || []).length})</option>`).join("");
+$("#rolefilter").addEventListener("change", e => {
+  const users = new Set(roleUse[e.target.value] || []);
+  $("#nodes").classList.toggle("filtering", !!e.target.value);
+  document.querySelectorAll(".m").forEach(b => b.classList.toggle("match", users.has(b.dataset.k)));
+});
+
+function hcl(src) {
+  return src.split("\n").map(l => {
+    const i = l.indexOf("#");
+    const [c, com] = i >= 0 && !/"[^"]*#/.test(l.slice(0, i + 1)) ? [l.slice(0, i), l.slice(i)] : [l, ""];
+    return esc(c).replace(/^(\s*)([a-z_]+)(\s*=)/, '$1<span class="c-key">$2</span>$3').replace(/&quot;[^&]*?&quot;/g, s => `<span class="c-str">${s}</span>`) + (com ? `<span class="c-com">${esc(com)}</span>` : "");
+  }).join("\n");
+}
+const mem = mb => !mb ? "—" : mb >= 1024 ? `${(mb / 1024).toLocaleString(locale)} ${t("GiB")}` : `${mb} ${t("MiB")}`;
+const disk = gb => gb ? `${gb} ${t("GB")}` : "—";
+const pickPb = m => m.pbs.find(p => key(p) === m.key) || m.pbs.find(p => !D.generic_playbooks.includes(p)) || m.pbs[0];
+const step = (html, cmd) => `<li><div>${html}${cmd ? `<code class="cmd">${esc(cmd)}</code>` : ""}</div></li>`;
+
+function renderFlow(m) {
+  const w = D.workflow || {}, tofu = w.tofu || "tofu", tf = m.tofu;
+  $("#lead").innerHTML = esc(t("OpenTofu builds the box: processor, memory, disk, IP address, firewall. Ansible fills it: packages, containers, configuration. The path below follows {name}; it changes with the machine picked in Machines.", {name: "\u0000"})).replace("\u0000", `<b>${esc(m.name)}</b>`);
+  let s = "";
+  if (tf) {
+    s += step(t("On {ws}, edit the {addr} block in {file}, line {line}.", {ws: esc(w.workstation || t("your workstation")), addr: code(tf.address), file: code(tf.file), line: tf.line}));
+    s += step(esc(t("Compute the difference with reality, for this machine only:")), `${tofu} plan -target=${tf.address} -out=${m.key}.plan`);
+    s += step(esc(w.reviewer ? t("{who} reviews the plan and applies it:", {who: w.reviewer}) : t("Review the plan, then apply it:")), `${tofu} apply ${m.key}.plan`);
+    s += step(esc(t("OpenTofu calls the Proxmox API on {node}: {kind} {id}, {cores} vCPU, {mem}, {disk}, IP {ip}.", {node: (m.node || "?").toUpperCase(), kind: tf.kind, id: tf.id ?? "", cores: tf.cores ?? "?", mem: mem(+tf.memory), disk: disk(tf.disk), ip: m.ip || "—"})));
+    if (m.fw) s += step(tp(m.fw.rules.length, "The guest firewall ({file}) only opens the {n} declared flow.", "The guest firewall ({file}) only opens the {n} declared flows.", {file: code(m.fw.file)}));
+  } else {
+    s += step(esc(m.phys ? t("{name} is not created by Tofu: it is a physical machine, installed by hand.", {name: m.name}) : t("{name} is not created by Tofu: it predates the repository.", {name: m.name})));
+    if (m.fw) s += step(t("Tofu still manages its firewall: {n} flows in {file}.", {n: m.fw.rules.length, file: code(m.fw.file)}));
+  }
+  $("#flow-tofu").innerHTML = s;
+  const pb = pickPb(m);
+  if (!pb) { $("#flow-ans").innerHTML = step(esc(t("No playbook targets {name}: Ansible does not configure it.", {name: m.name}))); return; }
+  const file = D.playbook_prefix + pb + ".yml";
+  s = step(t("Edit a role or {file}, then:", {file: code(file)}), "git commit && git push");
+  if (w.git_server) s += step(esc(t("The commit reaches {git}.", {git: w.git_server})));
+  s += w.controller ? step(esc(t("{ctl}, the Ansible controller, pulls the latest version:", {ctl: w.controller})), `${w.controller_path ? `cd ${w.controller_path} && ` : ""}git pull`)
+                    : step(esc(t("On the Ansible controller, pull the latest version:")), `${w.controller_path ? `cd ${w.controller_path} && ` : ""}git pull`);
+  s += step(esc(t("Run the playbook, as a dry run first:")), `${w.ansible || "ansible-playbook"} ${file} -l ${m.host || m.key} --check --diff`);
+  s += step(esc(t("Ansible connects over SSH to {host} and applies {roles}, task by task; a task already in the right state changes nothing.", {host: m.ip || m.host || m.key, roles: tp(m.roles.length, "{n} role", "{n} roles")})));
+  $("#flow-ans").innerHTML = s;
+}
+
+function renderDetail(m) {
+  const tf = m.tofu;
+  let h = `<div><h3>${esc(m.name)}</h3><p class="meta">${esc(m.phys ? t("Physical machine") : tf ? tf.kind : t("Guest"))}${m.node && !m.phys ? esc(t(" on {node}", {node: m.node.toUpperCase()})) : ""} · <span class="mono">${esc(m.ip || t("no IP declared"))}</span>${m.id != null ? " · id " + m.id : ""}</p></div>`;
+  h += `<section class="layer"><div class="row"><h3>${t("The box")}</h3><span class="pill t">tofu</span></div>`;
+  h += tf ? `<div class="stats">
+      <div class="stat"><span>vCPU</span><b>${esc(tf.cores ?? "—")}</b></div>
+      <div class="stat"><span>${t("Memory")}</span><b>${mem(+tf.memory)}</b></div>
+      <div class="stat"><span>${t("Disk")}</span><b>${disk(tf.disk)}</b></div>
+      <div class="stat"><span>${t("Tofu address")}</span><b class="mono">${esc(tf.address)}</b></div></div>
+      <details><summary>${esc(t("Show the code ({file}, line {line})", {file: tf.file, line: tf.line}))}</summary><pre class="code">${hcl(tf.code)}</pre></details>`
+    : `<p class="empty">${t(m.phys ? "Physical machine: no Tofu file creates it." : "Not described by Tofu.")}</p>`;
+  h += `</section><section class="layer"><div class="row"><h3>${t("Firewall")}</h3><span class="pill t">tofu</span></div>`;
+  h += m.fw && m.fw.rules.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Direction")}</th><th>${t("Port")}</th><th>${t("From / to")}</th><th>${t("Why")}</th></tr></thead><tbody>${m.fw.rules.map(r =>
+      `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td></tr>`).join("")}</tbody></table></div>`
+    : `<p class="empty">${t(m.fw ? "Firewall declared without rules of its own." : "No guest firewall in the repository.")}</p>`;
+  h += `</section><section class="layer"><div class="row"><h3>${t("The content")}</h3><span class="pill a">ansible</span></div>`;
+  if (m.roles.length) {
+    h += `<div class="pills">${(hostGroups[m.key] || []).map(g => `<span class="pill" title="${t("Inventory group")}">${esc(g)}</span>`).join("")}</div>
+    <div class="roles">${m.roles.map(r => {
+      const R = D.roles[r] || {tasks: [], about: "", templates: []};
+      return `<details class="role"><summary><code>${esc(r)}</code><span class="label">${tp(R.tasks.length, "{n} task", "{n} tasks")}</span></summary>${R.about ? `<p class="sub">${esc(R.about)}</p>` : ""}<ol>${R.tasks.map(x => `<li>${esc(x)}</li>`).join("")}</ol>${R.templates.length ? `<p class="sub">${esc(t("Files rendered from: {list}", {list: R.templates.join(", ")}))}</p>` : ""}</details>`;
+    }).join("")}</div>
+    <p class="sub">${esc(t("Playbooks targeting it: {list}", {list: m.pbs.map(p => p + ".yml").join(", ")}))}</p>`;
+  } else h += `<p class="empty">${t(m.host ? "In the inventory, but no playbook gives it a role." : "Not in the Ansible inventory.")}</p>`;
+  $("#detail").innerHTML = h + `</section>`;
+}
+
+const first = M[D.workflow?.example] || Object.values(M).find(m => m.tofu && m.roles.length) || Object.values(M)[0];
+let current = first?.key;
+function selectHost(k) {
+  current = M[k] ? k : first.key;
+  document.querySelectorAll(".m").forEach(b => b.setAttribute("aria-pressed", b.dataset.k === current));
+  renderDetail(M[current]); renderFlow(M[current]);
+}
+$("#nodes").addEventListener("click", e => {
+  const b = e.target.closest(".m"); if (!b) return;
+  location.hash = b.dataset.k;
+  if (matchMedia("(max-width:1100px)").matches) $("#detail").scrollIntoView({behavior: matchMedia("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth"});
+});
+
+// ---------- roles ----------
+$("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><th>${t("Machines")}</th></tr></thead><tbody>${Object.keys(D.roles).sort((a, b) => (roleUse[b] || []).length - (roleUse[a] || []).length || a.localeCompare(b)).map(r =>
+  `<tr><td><code>${esc(r)}</code></td><td class="num" data-label="${t("Tasks")}">${D.roles[r].tasks.length}</td><td class="wrap" data-label="${t("Machines")}"><div class="chips">${(roleUse[r] || []).sort().map(k => `<a class="chip" href="#${k}">${esc(M[k].name)}</a>`).join("") || `<span class="label">${t("None, or included by another role")}</span>`}</div></td></tr>`).join("")}</tbody>`;
+
+// ---------- views and address (#overview, #machines, #roles, #<machine>) ----------
+const VIEWS = ["overview", "machines", "roles"];
+function show(view) {
+  document.querySelectorAll(".view").forEach(s => {
+    const on = s.dataset.view === view;
+    if (on && s.hidden) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
+    s.hidden = !on;
+  });
+  document.querySelectorAll("#nav button").forEach(b => b.dataset.view === view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  $("#view-title").textContent = t(view[0].toUpperCase() + view.slice(1));
+}
+function route() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (M[h]) { selectHost(h); show("machines"); } else show(VIEWS.includes(h) ? h : "overview");
+}
+$("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) location.hash = b.dataset.view; });
+addEventListener("hashchange", route);
+
+// ---------- theme (auto, light, dark) and language, remembered per browser ----------
+const THEMES = ["auto", "light", "dark"];
+function setTheme(x) {
+  if (x === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = x;
+  $("#theme").textContent = t("Theme: {name}", {name: t(x)});
+  try { localStorage.setItem("cairn-iac-theme", x); } catch {}
+}
+let th = "auto"; try { th = localStorage.getItem("cairn-iac-theme") || "auto"; } catch {}
+setTheme(THEMES.includes(th) ? th : "auto");
+$("#theme").addEventListener("click", () => setTheme(THEMES[(THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % 3]));
+$("#lang").textContent = t("Language: {name}", {name: LANGS[lang].name});
+$("#lang").addEventListener("click", () => {
+  const ls = Object.keys(LANGS);
+  try { localStorage.setItem("cairn-iac-lang", ls[(ls.indexOf(lang) + 1) % ls.length]); } catch {}
+  location.reload();
+});
+
+if (first) { selectHost(current); route(); }
+</script>
