@@ -118,4 +118,5 @@ with tempfile.TemporaryDirectory() as tmp:
     assert bgit("rev-parse", "main") == rev and bgit("log", "-1", "--format=%s", out["ref"]) == "web: cores 3 -> 5"
     assert app2.head(data2 / "repo") == rev
     assert "mode" in refused(app2.put_settings, {"git": {**cfg["git"], "mode": "nope"}})
+assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
 print("ok")

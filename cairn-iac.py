@@ -10,7 +10,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
 """
-import argparse, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, threading, time
+import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, threading, time
 
 try:
     import yaml
@@ -230,6 +230,12 @@ def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
             "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "server": None}
+
+
+def favicon():
+    """PNG icon embedded in page.html, also served at /favicon.ico (Safari asks for it and skips SVG icons)."""
+    m = re.search(r"data:image/png;base64,([A-Za-z0-9+/=]+)", (HERE / "page.html").read_text(encoding="utf-8"))
+    return base64.b64decode(m.group(1))
 
 
 def render(data):
@@ -742,9 +748,9 @@ def serve(cfg):
         server_version, sys_version = "cairn-iac", ""
 
         def send(self, code, body, ctype="application/json"):
-            b = body.encode("utf-8") if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+            b = body if isinstance(body, bytes) else body.encode("utf-8") if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode("utf-8")
             self.send_response(code)
-            for k, v in (("Content-Type", f"{ctype}; charset=utf-8"), ("Content-Length", str(len(b))), ("Cache-Control", "no-store"),
+            for k, v in (("Content-Type", ctype if isinstance(body, bytes) else f"{ctype}; charset=utf-8"), ("Content-Length", str(len(b))), ("Cache-Control", "no-store"),
                          ("Content-Security-Policy", CSP), ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer")):
                 self.send_header(k, v)
             self.end_headers()
@@ -753,6 +759,8 @@ def serve(cfg):
         def do_GET(self):
             if self.path == "/healthz":
                 return self.send(200, "ok\n", "text/plain")
+            if self.path.split("?")[0] == "/favicon.ico":
+                return self.send(200, favicon(), "image/png")
             user = app.user(self)
             if not user:
                 return self.send(403, "access denied\n", "text/plain")
