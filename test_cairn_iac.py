@@ -1,5 +1,5 @@
 """Smoke test on example/: python3 test_cairn_iac.py"""
-import json, pathlib, shutil, subprocess, sys, tempfile, importlib.util
+import json, os, pathlib, shutil, subprocess, sys, tempfile, importlib.util
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("cairn_iac", HERE / "cairn-iac.py")
@@ -215,11 +215,21 @@ with tempfile.TemporaryDirectory() as tmp:
     run({"op": "group_del", "group": "proxmox_nodes", "host": "web"})
     assert ci.read_inventory((repo / cfg["inventory"]).read_text(encoding="utf-8"))[1]["proxmox_nodes"] == ["pve1", "pve2"]
 
-    # a role for a host: a new play
+    # a role for a host: a new play, then a second role goes into that play's roles list
     run({"op": "role_add", "playbook": "site", "role": "web", "host": "db"})
     groups, direct, ips, pbs, roles = ci.read_ansible(cfg, repo)
     assert pbs["site"][-1] == {"hosts": ["db"], "roles": ["web"]}
+    run({"op": "role_add", "playbook": "site", "role": "base", "host": "db"})
+    assert ci.read_ansible(cfg, repo)[3]["site"] == pbs["site"][:-1] + [{"hosts": ["db"], "roles": ["web", "base"]}]
     assert "Unknown role" in refused(ci.apply, {"op": "role_add", "playbook": "site", "role": "nope", "host": "db"}, cfg, repo)
+    # into the middle play, list at the key's indent, an item with sub-keys, a comment after; other plays untouched
+    pb = ("---\n- hosts: a\n  roles:\n    - x\n- name: B\n  hosts: b  # the b box\n  roles:\n  - x\n  - role: y\n    vars: {z: 1}\n"
+          "\n  # tasks next\n  tasks:\n    - debug: {}\n- hosts: b\n  roles: [x]\n")
+    out = ci.role_add(pb, "b", "w")
+    assert out == pb.replace("    vars: {z: 1}\n", "    vars: {z: 1}\n  - w\n"), out
+    # no play for exactly that host, or a flow-style list only: a new play
+    assert ci.role_add("- hosts: b\n  roles: [x]\n", "b", "w").endswith("\n- name: w (b)\n  hosts: b\n  roles:\n    - w\n")
+    assert ci.role_add("- hosts: b:c\n  roles:\n    - x\n", "b", "w").count("hosts: b\n") == 1
 
     # the server's commit path, without a remote: author from the proxy headers
     app = ci.App({**cfg, "data_dir": str(pathlib.Path(tmp) / "data"), "repo": str(repo), "base": repo})
@@ -253,5 +263,48 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "node" in refused(app2.put_settings, {"node_capacity": {"pve 1": {"cores": 8}}})
     app2.put_settings({"node_capacity": {"pve1": {"cores": 8, "memory": 4096}, "pve2": {}}})
     assert app2.settings()["node_capacity"] == {"pve1": {"cores": 8, "memory": 4096}}
+    assert "depth" in refused(app2.put_settings, {"git": {**cfg["git"], "depth": "0"}})
+
+    # AGit: who proposed it and the commit body in the pull request description, on one line
+    assert ci.agit_push("main", "t", "web: cores 2 -> 3\n\nWhy:\nmore load", "Ada Lovelace (ada)") == [
+        "push", "origin", "HEAD:refs/for/main", "-o", "topic=t", "-o", "title=web: cores 2 -> 3",
+        "-o", "description=Proposed by Ada Lovelace (ada) from Cairn IaC. Why: more load"]
+    assert ci.agit_push("main", "t", "x", "ada")[-1] == "description=Proposed by ada from Cairn IaC."
+
+# ---- a machine's history: its Tofu block, its firewall, the inventory lines naming it; shallow clone cut ----
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp) / "repo"
+    shutil.copytree(HERE / "example", repo)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout
+    n = iter(range(10))  # one commit a minute, so the newest-first order does not depend on the clock
+    commit = lambda m, who="t": subprocess.run(["git", "-C", str(repo), "-c", f"user.name={who}", "-c", "user.email=t@t", "commit", "-qam", m],
+                                               check=True, capture_output=True, env={**os.environ, "GIT_COMMITTER_DATE": f"2026-01-01T00:0{next(n)}:00Z"})
+    git("init", "-q", "-b", "main"); git("add", "."); commit("init")
+    edit = lambda f, a, b: (repo / f).write_text((repo / f).read_text(encoding="utf-8").replace(a, b, 1), encoding="utf-8", newline="\n")
+    edit("tofu/main.tf", "cores = 2", "cores = 3"); commit("web: cores 2 -> 3", "ada")
+    edit("tofu/main.tf", "cores = 4", "cores = 6"); commit("db: cores")             # db only
+    edit("tofu/main.tf", '"5432"', '"5433"'); commit("web: firewall port")         # web's firewall block
+    edit("ansible/inventory/hosts.yml", "10.0.0.21", "10.0.0.31"); commit("inventory: web address")  # web's lines
+    pb = repo / "ansible/playbooks/site.yml"
+    pb.write_text(ci.role_add(pb.read_text(encoding="utf-8"), "web", "base"), encoding="utf-8", newline=""); commit("site: base on web")
+    edit("ansible/inventory/hosts.yml", "printer:\n", "printer:\n          ansible_port: 22\n"); commit("printer port")
+    cfg = ci.load_config(repo / "cairn-iac.json")
+    app = ci.App({**cfg, "data_dir": str(pathlib.Path(tmp) / "data"), "base": repo})
+    h = app.history("web")
+    assert [(c["subject"], c["what"]) for c in h["commits"]] == [
+        ("site: base on web", ["playbook"]), ("inventory: web address", ["inventory"]), ("web: firewall port", ["firewall"]), ("web: cores 2 -> 3", ["tofu"]),
+        ("init", ["tofu", "firewall", "inventory", "playbook"])], h
+    assert h["commits"][3]["author"] == "ada" and not h["truncated"] and not h["shallow"] and "cut" not in h["commits"][0]
+    assert app.history("web") is h  # cached at this commit
+    assert "Unknown machine" in refused(app.history, "nope")
+    # a clone 3 commits deep: the oldest one reached is the boundary, what came before is not there
+    bare = pathlib.Path(tmp) / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(bare)], check=True)
+    app2 = ci.App({**cfg, "data_dir": str(pathlib.Path(tmp) / "data2"), "base": repo,
+                   "git": {**cfg["git"], "url": bare.as_uri(), "depth": 3}})
+    h = app2.history("web")
+    assert [c["subject"] for c in h["commits"]] == ["site: base on web"] and h["truncated"] and h["since"] == "2026-01-01", h
+    h = app2.history("db")  # the boundary commit carries every line of the files: not listed, the history is cut there
+    assert h["truncated"] and h["shallow"] and h["commits"] == [] and h["depth"] == 3, h
 assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
 print("ok")

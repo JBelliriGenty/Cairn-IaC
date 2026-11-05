@@ -234,6 +234,14 @@ pre.diff { max-height: 50vh; }
 .mfind li { padding: 2px 0 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
 .mfind li.warn { border-left-color: var(--warn); color: var(--fg); }
 
+/* history */
+.hist summary { font-size: 16px; font-weight: 600; color: var(--fg); }
+.hlist { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+.hlist li { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--line); }
+.hlist li:first-child { border-top: 0; }
+.hlist a.mono { color: var(--accent); }
+.hist .sub { margin-top: 8px; }
+
 /* flows */
 .fl { grid-template-columns: minmax(0, 1fr); }
 .fl .card > .row { margin-bottom: 8px; }
@@ -566,6 +574,15 @@ const FR = {
   "host": "hôte",
   "role": "rôle",
   "playbook": "playbook",
+  // history
+  "History": "Historique", "Loading…": "Chargement…", "Inventory": "Inventaire",
+  "No commit touches this machine in the history the server has.": "Aucun commit ne touche cette machine dans l'historique dont dispose le serveur.",
+  "History cut: the server keeps the last {n} commits, nothing before {date} (Settings, Git, clone depth).":
+    "Historique tronqué : le serveur garde les {n} derniers commits, rien avant le {date} (Réglages, Git, profondeur du clone).",
+  "Commit URL, with {sha}": "Adresse d'un commit, avec {sha}",
+  "Clone depth: commits kept, as far back as a machine's history goes": "Profondeur du clone : commits gardés, jusqu'où remonte l'historique d'une machine",
+  "Unknown machine: {name}": "Machine inconnue : {name}",
+  "git depth": "profondeur Git",
 };
 const DICT = {fr: FR};
 const LANGS = {en: {name: "English", locale: "en-GB"}, fr: {name: "Français", locale: "fr-FR"}};
@@ -775,8 +792,37 @@ function renderDetail(m) {
       <label>${t("In the playbook")}<select name="playbook">${pbs.map(p => `<option${p === pickPb(m) ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
       <button class="primary">${t("Preview")}</button></form></details>`;
   }
-  $("#detail").innerHTML = h + `</section>`;
+  // history (server mode): loaded when opened, then kept open from machine to machine
+  if (S) h += `</section><section class="layer"><details class="hist" id="hist"${histOpen ? " open" : ""}><summary>${t("History")}</summary><div id="hist-body"></div></details>`;
+  $("#detail").innerHTML = h + `</section>`;  // an open history fires "toggle", which loads it
 }
+
+// ---------- history (server mode): the latest commits touching a machine, from GET /api/history ----------
+let histOpen = false;
+const day = d => new Date(d + "T12:00:00").toLocaleDateString(locale);
+const WHAT = {tofu: ["Tofu", "t"], firewall: ["Firewall", "t"], inventory: ["Inventory", "a"], playbook: ["Playbook", "a"]};
+async function loadHistory(k) {
+  const body = $("#hist-body");
+  body.innerHTML = `<p class="empty">${t("Loading…")}</p>`;
+  let r;
+  try {
+    const res = await fetch("/api/history?machine=" + encodeURIComponent(k));
+    r = await res.json();
+    if (!res.ok || r.error) throw r;
+  } catch (e) { if (current === k) body.innerHTML = `<p class="err">${esc(errText(e.error ? e : {error: "Invalid request"}))}</p>`; return; }
+  if (current !== k || !$("#hist-body")) return;  // another machine was picked meanwhile
+  const sha = c => L.commit ? `<a class="mono" href="${esc(L.commit.replace("{sha}", c.sha))}" target="_blank" rel="noopener">${esc(c.short)}</a>` : `<span class="mono label">${esc(c.short)}</span>`;
+  $("#hist-body").innerHTML = (r.commits.length ? `<ul class="hlist">${r.commits.map(c => `<li>
+      <span class="wrap">${esc(c.subject)}</span>
+      <div class="row"><span class="label">${esc(day(c.date))} · ${esc(c.author)}</span>${sha(c)}${c.what.map(w => `<span class="pill ${WHAT[w][1]}">${t(WHAT[w][0])}</span>`).join("")}</div></li>`).join("")}</ul>`
+    : `<p class="empty">${t("No commit touches this machine in the history the server has.")}</p>`)
+    + (r.truncated ? `<p class="sub">${esc(t("History cut: the server keeps the last {n} commits, nothing before {date} (Settings, Git, clone depth).", {n: r.depth, date: day(r.since)}))}</p>` : "");
+}
+$("#detail").addEventListener("toggle", e => {
+  if (e.target.id !== "hist") return;
+  histOpen = e.target.open;
+  if (histOpen) loadHistory(current);
+}, true);
 
 // ---------- editing (server mode): a form gives an edit, the server shows its diff, then commits and pushes ----------
 async function api(path, body) {
@@ -847,16 +893,17 @@ const FORM = [
     ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
     ["workflow.controller_path", "Repository path on the controller"], ["workflow.ansible", "Ansible command"]]],
   ["Note on the overview", [["note.title", "Title"], ["note.text", "Text (`code` between backquotes)", "text"]]],
-  ["Links to the Git web interface", [["links.name", "Name"], ["links.view", "View URL, with {file} and {line}"], ["links.edit", "Edit URL, with {file}"]]],
+  ["Links to the Git web interface", [["links.name", "Name"], ["links.view", "View URL, with {file} and {line}"], ["links.edit", "Edit URL, with {file}"], ["links.commit", "Commit URL, with {sha}"]]],
   ["Firewall modules", [["firewall_lists.in", "List for incoming rules"], ["firewall_lists.out", "List for outgoing rules"]]],
   ["Git", [["git.url", "Remote (empty: the local repository, nothing pushed)"], ["git.branch", "Branch"], ["git.push", "Push after each commit", "bool"], ["git.mode", "How an edit reaches the branch", "mode"],
-    ["git.name", "Committer name"], ["git.email", "Committer email"], ["git.commit_prefix", "Commit message prefix"]]],
+    ["git.name", "Committer name"], ["git.email", "Committer email"], ["git.commit_prefix", "Commit message prefix"],
+    ["git.depth", "Clone depth: commits kept, as far back as a machine's history goes"]]],
 ];
 const getp = (o, p) => p.split(".").reduce((a, k) => a == null ? undefined : a[k], o);
 function renderSettings() {
   const st = S.settings;
   const field = ([p, l, type]) => {
-    const label = t(l, {file: "{file}", line: "{line}"}), v = getp(st, p), id = "s-" + p.replace(".", "-");
+    const label = t(l, {file: "{file}", line: "{line}", sha: "{sha}"}), v = getp(st, p), id = "s-" + p.replace(".", "-");
     if (type === "bool") return `<label class="check wide"><input type="checkbox" id="${id}" data-p="${p}" data-t="bool"${v ? " checked" : ""}> ${esc(label)}</label>`;
     if (type === "text") return `<label class="wide">${esc(label)}<textarea id="${id}" data-p="${p}">${esc(v)}</textarea></label>`;
     if (type === "mode") return `<label class="wide">${esc(label)}<select id="${id}" data-p="${p}">${[["push", "Pushed onto the branch"], ["agit", "Pull request opened by the push (Forgejo, Gitea: AGit)"], ["branch", "Pushed onto a new branch, pull request opened by hand"]].map(([k, l]) => `<option value="${k}"${(v || "push") === k ? " selected" : ""}>${esc(t(l))}</option>`).join("")}</select></label>`;

@@ -12,7 +12,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
 """
-import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, threading, time
+import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, threading, time, urllib.parse
 
 try:
     import yaml
@@ -25,6 +25,7 @@ DEFAULTS = {
     "tofu_dir": "tofu", "inventory": "ansible/inventory/hosts.yml",
     "playbooks": "ansible/playbooks", "roles": "ansible/roles",
     "node_group": "proxmox_nodes", "bare_metal_group": "bare_metal",
+    # links: {name, view, edit, commit}, URL templates of the Git web UI ({file}, {line}; {sha} for commit).
     "generic_playbooks": [], "note": None, "links": {},
     # Roles every inventory machine must get (drift view and --check); empty: not checked.
     "required_roles": [],
@@ -35,7 +36,9 @@ DEFAULTS = {
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
     # mode: push (to the branch), branch (a new branch per edit, to open a pull request from),
     # agit (Forgejo/Gitea AGit: refs/for/<branch> opens the pull request itself).
-    "git": {"url": "", "branch": "main", "push": True, "mode": "push", "name": "Cairn IaC", "email": "cairn-iac@localhost", "commit_prefix": ""},
+    # depth: commits kept by the server's clone, as far back as a machine's history goes.
+    "git": {"url": "", "branch": "main", "push": True, "mode": "push", "name": "Cairn IaC", "email": "cairn-iac@localhost", "commit_prefix": "",
+            "depth": 200},
 }
 # Keys the Settings page edits (stored in <data_dir>/settings.json, seeded once from the config).
 SETTINGS = [k for k in DEFAULTS if k != "repo"]
@@ -769,12 +772,57 @@ def group_del(text, group, host):
     raise Refused("{host} is not listed directly in {group}", host=host, group=group)
 
 
+def play_spans(lines, plays):
+    """(play, first line, end line exclusive) of each top-level play, 0-based; [] when the `- ` items and the parsed
+    plays do not line up."""
+    starts = [i for i, l in enumerate(lines) if re.match(r"-(\s|$)", l)]
+    if not isinstance(plays, list) or len(starts) != len(plays):
+        return []
+    return [(p, s, e) for p, s, e in zip(plays, starts, starts[1:] + [len(lines)])]
+
+
+def role_into_play(text, plays, host, role):
+    """The role appended to the block-style `roles:` list of the first play whose hosts is exactly `host`; None if none."""
+    lines = text.splitlines(keepends=True)
+    for n, (p, s, e) in enumerate(play_spans(lines, plays)):
+        if not (isinstance(p, dict) and str(p.get("hosts", "")).strip() == host and isinstance(p.get("roles"), list) and p["roles"]):
+            continue
+        ki = len(re.match(r"-\s*", lines[s]).group())  # indent of the play's keys
+        ri = next((j for j in range(s + 1, e) if indent(lines[j]) == ki and re.fullmatch(r"\s*roles:\s*(#.*)?\s*", lines[j])), None)
+        if ri is None:
+            return None
+        j, items = ri + 1, []
+        while j < e and (not lines[j].strip() or lines[j].lstrip().startswith("#") or indent(lines[j]) > ki
+                         or (indent(lines[j]) == ki and lines[j].lstrip().startswith("- "))):
+            if lines[j].lstrip().startswith("- ") and (not items or indent(lines[j]) == indent(lines[items[0]])):
+                items.append(j)
+            j += 1
+        while j > ri + 1 and (not lines[j - 1].strip() or lines[j - 1].lstrip().startswith("#")):
+            j -= 1
+        if not items:
+            return None
+        nl = "\r\n" if lines[ri].endswith("\r\n") else "\n"
+        if not lines[j - 1].endswith("\n"):
+            lines[j - 1] += nl
+        lines.insert(j, " " * indent(lines[items[0]]) + f"- {role}" + nl)
+        return "".join(lines), n
+    return None
+
+
 def role_add(text, host, role):
+    """The role for the host: into a play that targets exactly that host, else a new play at the end."""
     name_ok(host, "host"), name_ok(role, "role")
-    # ponytail: a new play per (host, role); merging into an existing play's roles list is left to the reviewer.
+    plays = yaml.safe_load(text) or []
+    merged = role_into_play(text, plays, host, role) if isinstance(plays, list) else None
+    if merged:
+        out, n = merged
+        new = yaml.safe_load(out)
+        if isinstance(new, list) and len(new) == len(plays) and new[n].get("roles") == plays[n]["roles"] + [role] \
+                and all(a == b for i, (a, b) in enumerate(zip(new, plays)) if i != n):
+            return out
     out = text + ("" if not text or text.endswith("\n") else "\n") + f"\n- name: {role} ({host})\n  hosts: {host}\n  roles:\n    - {role}\n"
-    plays = yaml.safe_load(out)
-    if not isinstance(plays, list) or plays[-1].get("roles") != [role]:
+    new = yaml.safe_load(out)
+    if not isinstance(new, list) or new[-1].get("roles") != [role]:
         raise Refused("The edit did not give the expected playbook: edit it in the file")
     return out
 
@@ -837,6 +885,85 @@ def apply(op, cfg, repo):
     raise Refused("Unknown edit: {op}", op=str(o)[:20])
 
 
+def span(repo, rel, line):
+    """First and last line of the top-level block starting at `line` in a repo file, None if gone."""
+    try:
+        text = (repo / rel).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return next(((l, l + body.count("\n")) for _, l, body in blocks(text) if l == line), None)
+
+
+# Fields split by 0x02/0x03, not 0x1e/0x1f: Python treats those as whitespace and line breaks.
+LOG = "--format=%x02%H%x03%ct%x03%cs%x03%an%x03%s"
+
+
+def history(git, repo, data, m, cfg, cap=15):
+    """Latest commits touching a machine: its Tofu block, firewall block(s) and inventory entries (git log -L), and
+    inventory or playbook changes whose lines name its host (git log -G). git(*args) runs git in the repo, returns stdout.
+    A commit on the shallow clone's boundary is not listed: `truncated`, history not fetched before `since`."""
+    queries = []
+    tf = next((x for x in data["tofu"] if m["tofu"] and x["address"] == m["tofu"]["address"]), None)
+    if tf:
+        queries.append(("tofu", ["-L", f"{tf['line']},{tf['line'] + tf['code'].count(chr(10))}:{tf['file']}"]))
+    fw = data["firewalls"].get(m["firewall"]) if m["firewall"] is not None else None
+    for at in {(fw["file"], fw["line"]), tuple(fw["options"] or (fw["file"], fw["line"]))} if fw else ():
+        sp = span(repo, *at)
+        if sp:
+            queries.append(("firewall", ["-L", f"{sp[0]},{sp[1]}:{at[0]}"]))
+    if m["host"]:
+        # its entries in the inventory (the host key and its variables), then any line naming it (membership, plays)
+        lines = (repo / cfg["inventory"]).read_text(encoding="utf-8").splitlines()
+        for i, l in enumerate(lines):
+            if yaml_key(l) == m["host"] and indent(l) > 0:
+                queries.append(("inventory", ["-L", f"{i + 1},{sub_block(lines, i)}:{cfg['inventory']}"]))
+        # the plays aimed at exactly that host (a role added to one changes no line naming it)
+        for f in sorted((repo / cfg["playbooks"]).glob("*.yml")):
+            lines = f.read_text(encoding="utf-8").splitlines(keepends=True)
+            try:
+                plays = yaml.safe_load("".join(lines))
+            except yaml.YAMLError:
+                continue
+            for p, s, e in play_spans(lines, plays):
+                while e > s + 1 and not lines[e - 1].strip():
+                    e -= 1
+                if isinstance(p, dict) and str(p.get("hosts", "")).strip() == m["host"]:
+                    queries.append(("playbook", ["-L", f"{s + 1},{e}:{f.relative_to(repo).as_posix()}"]))
+        word = "[^A-Za-z0-9_.-]"
+        queries.append(("inventory", ["-G", f"(^|{word}){m['host'].replace('.', '[.]')}($|{word})", "--",
+                                      cfg["inventory"], cfg["playbooks"]]))
+    shallow = (repo / git("rev-parse", "--git-path", "shallow")).resolve()
+    cut = set(shallow.read_text().split()) if shallow.is_file() else set()
+    found = {}
+    for what, args in queries:
+        for l in git("log", "-s", "-n", str(cap), LOG, *args).splitlines():
+            if l.startswith("\x02"):
+                sha, ct, date, author, subject = l[1:].split("\x03", 4)
+                c = found.setdefault(sha, {"sha": sha, "short": sha[:8], "time": int(ct), "date": date, "author": author,
+                                           "subject": subject[:200], "what": [], "cut": sha in cut})
+                if what not in c["what"]:
+                    c["what"].append(what)
+    commits = sorted(found.values(), key=lambda c: -c["time"])[:cap]
+    # The boundary commit holds every line older than the clone: shown as the cut, not as a change.
+    edge = next((c for c in commits if c.pop("cut")), None)
+    return {"commits": [c for c in commits if c["sha"] != (edge or {}).get("sha")], "truncated": edge is not None,
+            "since": edge and edge["date"], "shallow": bool(cut), "depth": depth(cfg["git"])}
+
+
+def depth(g):
+    """Clone depth from the git settings (an int, or a string from an old settings file)."""
+    return int(g.get("depth") or 0) or DEFAULTS["git"]["depth"]
+
+
+def agit_push(branch, topic, text, who):
+    """git push arguments opening a Forgejo/Gitea AGit pull request: title = the commit subject, description = who
+    proposed it and the commit body. Push options cannot hold a newline: the description is one line."""
+    subject, _, body = text.strip().partition("\n")
+    desc = " ".join(f"Proposed by {who} from Cairn IaC. {body}".split())[:2000]
+    return ["push", "origin", f"HEAD:refs/for/{branch}", "-o", f"topic={topic}", "-o", f"title={subject.strip()[:200]}",
+            "-o", f"description={desc}"]
+
+
 # ---------- server: the page, edits committed and pushed to Git, Settings ----------
 
 class App:
@@ -851,7 +978,7 @@ class App:
         if not cfg["ssh_key"] and not self.key.exists() and shutil.which("ssh-keygen"):
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "cairn-iac", "-f", str(self.key)], check=True)
         self.lock = threading.Lock()  # ponytail: one lock for sync, edits and page builds; fine for a handful of users
-        self.synced, self.sync_error, self.cache = 0.0, "", (None, None)
+        self.synced, self.sync_error, self.cache, self.hist = 0.0, "", (None, None), {}
         self.proxies = [ipaddress.ip_network(p, strict=False) for p in cfg["trusted_proxies"]]
 
     def settings(self):
@@ -874,7 +1001,7 @@ class App:
         if self.key.exists():
             env["GIT_SSH_COMMAND"] = (f"ssh -i {self.key} -o IdentitiesOnly=yes -o BatchMode=yes "
                                       f"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={self.data / 'known_hosts'}")
-        r = subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
         if r.returncode:
             raise Refused("git {cmd}: {err}", cmd=args[0], err=(r.stderr or r.stdout).strip()[-400:])
         return (r.stdout + r.stderr) if output else r.stdout.strip()
@@ -888,10 +1015,10 @@ class App:
         try:
             if not (repo / ".git").exists():
                 shutil.rmtree(repo, ignore_errors=True)
-                self.git(self.data, "clone", "-q", "--depth", "50", "--branch", g["branch"], "--", g["url"], str(repo), timeout=300)
+                self.git(self.data, "clone", "-q", "--depth", str(depth(g)), "--branch", g["branch"], "--", g["url"], str(repo), timeout=300)
             else:
                 self.git(repo, "remote", "set-url", "origin", g["url"])
-                self.git(repo, "fetch", "-q", "--depth", "50", "origin", g["branch"], timeout=120)
+                self.git(repo, "fetch", "-q", "--depth", str(depth(g)), "origin", g["branch"], timeout=120)
                 self.git(repo, "reset", "-q", "--hard", "FETCH_HEAD")
                 self.git(repo, "clean", "-qfd")
             self.synced, self.sync_error = time.time(), ""
@@ -916,19 +1043,23 @@ class App:
         ok = not self.cfg["require_groups"] or any(g in self.cfg["require_groups"] for g in groups)
         return user if user and ok and "\n" not in user else None
 
+    def model(self, s, repo, rev):
+        """(stamp, collected model) at this commit and these settings; stamp None on error (caller holds the lock)."""
+        stamp = (rev, self.settings_file.stat().st_mtime)
+        if self.cache[0] != stamp or not rev:
+            try:
+                self.cache = (stamp, collect(s, repo))
+            except (OSError, yaml.YAMLError) as e:  # no clone yet, wrong paths: the Settings page stays reachable
+                self.cache = (None, {**collect_empty(s), "error": str(e)})
+        return self.cache
+
     def page(self, user):
         with self.lock:
             s = self.settings()
             self.sync(s)
             repo = self.repo(s)
             rev = self.head(repo)
-            stamp = (rev, self.settings_file.stat().st_mtime)
-            if self.cache[0] != stamp or not rev:
-                try:
-                    self.cache = (stamp, collect(s, repo))
-                except (OSError, yaml.YAMLError) as e:  # no clone yet, wrong paths: the Settings page stays reachable
-                    self.cache = (None, {**collect_empty(s), "error": str(e)})
-            data = dict(self.cache[1])
+            data = dict(self.model(s, repo, rev)[1])
         pub = pathlib.Path(f"{self.key}.pub")
         data["server"] = {
             "user": user, "rev": rev, "edit": not self.cfg["read_only"], "settings": {k: s[k] for k in SETTINGS},
@@ -937,12 +1068,30 @@ class App:
         }
         return render(data)
 
+    def history(self, k):
+        """A machine's latest commits (see history()), cached per commit and settings."""
+        with self.lock:
+            s = self.settings()
+            self.sync(s)
+            repo = self.repo(s)
+            stamp, data = self.model(s, repo, self.head(repo))
+            if not stamp:
+                raise Refused("Cannot read the repository: {err}", err=data.get("error", ""))
+            if (stamp, k) not in self.hist:
+                m = next((x for x in data["machines"] if x["key"] == k), None)
+                if not m:
+                    raise Refused("Unknown machine: {name}", name=str(k)[:64])
+                self.hist = {x: v for x, v in self.hist.items() if x[0] == stamp}
+                self.hist[stamp, k] = history(lambda *a: self.git(repo, *a), repo, data, m, s)
+            return self.hist[stamp, k]
+
     def author(self, h, user):
+        """(name, email) of the signed-in user, from the proxy headers, else made from the user name."""
         name = h.headers.get(self.cfg["name_header"], "").strip() if self.proxies else ""
         mail = h.headers.get(self.cfg["email_header"], "").strip() if self.proxies else ""
         name = name if name and not re.search(r"[<>\n]", name) else user
         mail = mail if re.fullmatch(r"[^<>\s@]+@[^<>\s@]+", mail) else f"{user}@cairn-iac"
-        return f"{name} <{mail}>"
+        return name, mail
 
     def edit(self, h, user, op, commit):
         if self.cfg["read_only"]:
@@ -968,14 +1117,15 @@ class App:
             try:
                 self.git(repo, "add", "--", rel)
                 self.git(repo, "-c", f"user.name={g['name']}", "-c", f"user.email={g['email']}",
-                         "commit", "-q", "--author", self.author(h, user), "-m", text)
+                         "commit", "-q", "--author", "{} <{}>".format(*self.author(h, user)), "-m", text)
                 sha = self.git(repo, "rev-parse", "--short", "HEAD")
                 mode, ref, link = g.get("mode") or "push", g["branch"], ""
                 if g["url"] and g["push"]:
                     topic = "cairn-iac/" + re.sub(r"[^A-Za-z0-9_.-]", "-", user)[:40] + time.strftime("-%Y%m%d-%H%M%S")
                     if mode == "agit":
-                        out = self.git(repo, "push", "origin", f"HEAD:refs/for/{g['branch']}", "-o", f"topic={topic}",
-                                       "-o", "title=" + text.splitlines()[0][:200], timeout=120, output=True)
+                        name = self.author(h, user)[0]
+                        out = self.git(repo, *agit_push(g["branch"], topic, text, name if name == user else f"{name} ({user})"),
+                                       timeout=120, output=True)
                         ref = topic
                     elif mode == "branch":
                         out = self.git(repo, "push", "origin", f"HEAD:refs/heads/{topic}", timeout=120, output=True)
@@ -1024,6 +1174,9 @@ class App:
         g = out["git"] = {**DEFAULTS["git"], **out["git"]}
         if g["url"].startswith("-") or not re.fullmatch(r"[A-Za-z0-9._/-]+", g["branch"]) or g["branch"].startswith("-"):
             raise Refused("Invalid {what}: {value}", what="git", value=(g["url"] or g["branch"])[:80])
+        if not str(g["depth"]).isdigit() or not 1 <= int(g["depth"]) <= 100000:
+            raise Refused("Invalid {what}: {value}", what="git depth", value=str(g["depth"])[:20])
+        g["depth"] = int(g["depth"])
         if g.get("mode") not in ("push", "branch", "agit"):
             raise Refused("Invalid {what}: {value}", what="git mode", value=str(g.get("mode"))[:20])
         for k in ("name", "email"):
@@ -1072,6 +1225,13 @@ def serve(cfg):
             user = app.user(self)
             if not user:
                 return self.send(403, "access denied\n", "text/plain")
+            if self.path.startswith("/api/history?"):
+                try:
+                    return self.send(200, app.history(urllib.parse.parse_qs(self.path.split("?", 1)[1]).get("machine", [""])[0]))
+                except Refused as e:
+                    return self.send(409, {"error": e.msg, "vars": e.v})
+                except subprocess.TimeoutExpired:
+                    return self.send(504, {"error": "Git did not answer in time"})
             if self.path.split("?")[0] != "/":
                 return self.send(404, "not found\n", "text/plain")
             self.send(200, app.page(user), "text/html")

@@ -180,7 +180,7 @@ Every key is optional; paths are relative to the config file.
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
-| `links` | `{name, view, edit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}` |
+| `links` | `{name, view, edit, commit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}`; `commit` with `{sha}`, for the machine history (server) |
 
 `workflow` keys: `example` (machine shown first), `workstation` (where Tofu
 runs), `tofu` (command, `tofu`; a wrapper such as `./tofu.sh` works),
@@ -209,11 +209,14 @@ playbook as the change path shows. Forgejo / Gitea:
 ```json
 "links": {"name": "Forgejo",
           "view": "https://git.example/me/iac/src/branch/main/{file}#L{line}",
-          "edit": "https://git.example/me/iac/_edit/main/{file}"}
+          "edit": "https://git.example/me/iac/_edit/main/{file}",
+          "commit": "https://git.example/me/iac/commit/{sha}"}
 ```
 
-GitHub: `…/blob/main/{file}#L{line}` and `…/edit/main/{file}`; GitLab:
-`…/-/blob/main/{file}#L{line}` and `…/-/edit/main/{file}`.
+GitHub: `…/blob/main/{file}#L{line}`, `…/edit/main/{file}` and
+`…/commit/{sha}`; GitLab: `…/-/blob/main/{file}#L{line}`,
+`…/-/edit/main/{file}` and `…/-/commit/{sha}`. `commit` links the server's
+machine history (below) to each commit.
 
 ## Server: edit from the page, commit and push
 
@@ -231,7 +234,9 @@ plus `git` and `ssh`). Each machine gets forms to:
 - add it to or remove it from an inventory group (a machine new to the
   inventory gets its `ansible_host`; a host with variables in that group is
   left to you);
-- give it a role, as a new play appended to a playbook.
+- give it a role: appended to the block-style `roles:` list of a play whose
+  `hosts` is exactly that machine in the chosen playbook, else as a new play
+  at its end.
 
 Every edit is shown as a diff first; the file is parsed again to check the
 result. Then it is committed, **authored by the signed-in user** (the
@@ -239,6 +244,21 @@ proxy's `Remote-Name` / `Remote-Email`, else the user name), committed by
 the server's identity, and pushed. A refused push leaves nothing behind:
 the clone is reset to the remote. It still never runs `tofu` or
 `ansible`: plan/apply and playbooks stay yours, as the change path shows.
+
+The pull request is opened by the server's key, so the Git server shows
+that account as its author. In `agit` mode the push also sets the pull
+request's description: "Proposed by *name* (*user*) from Cairn IaC", then
+the commit message body, on one line (push options cannot hold a line
+break). In `branch` mode you open the pull request yourself; the commit
+inside it carries the author either way.
+
+Each machine also has a **History**, loaded when opened: the latest 15
+commits touching its Tofu block, its firewall block(s), its inventory
+entries or the plays aimed at it (`git log -L`), and inventory or playbook
+changes naming it (`git log -G`), newest first, cached per commit. The
+server's clone is shallow (`git.depth`, 200 commits): when the history
+reaches that limit, the page says so and from which date nothing older was
+fetched; raise `git.depth` to go further back.
 
 A **Settings** page holds everything about the page and the repository
 (the keys of the table above, `firewall_lists` and `git`). It is stored in
@@ -261,7 +281,7 @@ Who may use it is set in the config file only, never from the page:
 | `read_only` | page and Settings without editing (`false`) |
 | `ssh_key` | private key for the Git remote, e.g. one already allowed on the repository (`.pub` beside it); empty: generated in `data_dir` |
 | `firewall_lists` | `{in, out}`: list names that receive new rules in a firewall module (`inbound_rules`, `outbound_rules`) |
-| `git` | `{url, branch, push, mode, name, email, commit_prefix}`: remote, branch (`main`), push after each commit (`true`), `mode`: `push` onto the branch, `agit` (Forgejo/Gitea: `refs/for/<branch>` opens a pull request, no API token), `branch` (a new branch per edit, open the pull request yourself); committer identity |
+| `git` | `{url, branch, push, mode, name, email, commit_prefix, depth}`: remote, branch (`main`), push after each commit (`true`), `mode`: `push` onto the branch, `agit` (Forgejo/Gitea: `refs/for/<branch>` opens a pull request, no API token), `branch` (a new branch per edit, open the pull request yourself); committer identity; commits kept in the clone, as far back as the machine history goes (`200`) |
 
 ```json
 {
