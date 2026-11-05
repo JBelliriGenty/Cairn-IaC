@@ -78,3 +78,11 @@ resource "proxmox_virtual_environment_firewall_rules" "web" {
     dest    = "10.0.0.22/32"
   }
 }
+
+resource "proxmox_virtual_environment_firewall_options" "web" {
+  node_name     = "pve1"
+  container_id  = 201
+  enabled       = true
+  input_policy  = "DROP"
+  output_policy = "DROP"
+}

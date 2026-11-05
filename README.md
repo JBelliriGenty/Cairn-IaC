@@ -14,10 +14,14 @@ for **Proxmox** actually builds. For each machine:
   `ansible-playbook … -l <host> --check --diff`.
 
 A Roles view lists every role with the machines that get it, and the
-machine map can highlight the machines of one role.
+machine map can highlight the machines of one role. A Drift view lists
+where the repository disagrees with itself (see Drift), also available from
+the command line for CI.
 
 It reads files only: it never runs `tofu` or `ansible`, needs no state file
-and no credentials. An optional server mode adds editing from the page,
+and no credentials. It never reads a Tofu state (`*.tfstate`,
+`*.tfstate.backup`) or a saved plan (`*.plan`), which can hold secrets:
+only `*.tf` files. An optional server mode adds editing from the page,
 committed and pushed to Git (see Server). The output is a single self-contained page (no external
 script, font or request), to open locally or serve from anywhere.
 
@@ -52,7 +56,10 @@ and serve the file with any web server.
     `dedicated`, `disk_size` or `size`, `ip_address` or `address`;
   - firewalls: `proxmox_virtual_environment_firewall_rules` resources, and
     modules with a `container_id`/`vm_id` and `*_rules = [ { … } ]` lists
-    (a list whose name contains `egress` or `outbound` is outgoing).
+    (a list whose name contains `egress` or `outbound` is outgoing); whether
+    a guest firewall is on, and its input policy, from
+    `proxmox_virtual_environment_firewall_options` resources or from the
+    `enabled` / `input_policy` arguments of a firewall module.
 - **Ansible**: the YAML inventory (nested `children` groups included), every
   `*.yml` playbook (`hosts` patterns resolved by group, `roles` and
   `include_role`/`import_role` tasks), and each role's `tasks/*.yml` task
@@ -63,6 +70,35 @@ name (case-insensitive, `_` = `-`).
 
 Not followed: exclusion patterns (`!host`, `&group`), roles included by
 other roles, `import_playbook`, values computed in HCL (`var.`, `local.`).
+
+## Drift
+
+The Drift view (with a count in the menu and on the overview) and
+`--check` list the same findings. Warnings:
+
+- a Tofu machine absent from the inventory;
+- an IP that differs between Tofu and `ansible_host`;
+- a firewall whose `container_id`/`vm_id` matches no machine (neither a
+  Tofu machine nor, by name, an inventory host);
+- a guest firewall turned off (`enabled = false`) that has rules: they
+  protect nothing;
+- an inventory host missing one of the `required_roles`.
+
+Notes (they can be on purpose):
+
+- an inventory host no Tofu block creates, outside the node and
+  bare-metal groups;
+- an inventory host no playbook targets;
+- firewall rules (provider resource) without a firewall options resource:
+  Proxmox keeps a guest firewall off until it is turned on.
+
+```sh
+python3 cairn-iac.py -c cairn-iac.json --check         # one line per finding, exit 1 on a warning
+python3 cairn-iac.py -c cairn-iac.json --check --json  # the same, as JSON
+```
+
+Each JSON finding: `kind`, `severity` (`warn` or `info`), `machine`,
+`file`, `line`, `msg` (an English template) and its `vars`.
 
 ## Configuration (JSON)
 
@@ -79,6 +115,7 @@ Every key is optional; paths are relative to the config file.
 | `node_group` | inventory group of the Proxmox nodes, shown as map columns (`proxmox_nodes`) |
 | `bare_metal_group` | inventory group of physical machines outside the cluster (`bare_metal`) |
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
+| `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
 | `links` | `{name, view, edit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}` |

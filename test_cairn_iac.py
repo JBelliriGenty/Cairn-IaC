@@ -1,5 +1,5 @@
 """Smoke test on example/: python3 test_cairn_iac.py"""
-import json, pathlib, shutil, subprocess, tempfile, importlib.util
+import json, pathlib, shutil, subprocess, sys, tempfile, importlib.util
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("cairn_iac", HERE / "cairn-iac.py")
@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory() as tmp:
     page = out.read_text(encoding="utf-8")
     data = json.loads(page.split("const D = ")[1].split(";\n")[0])
 
-web, db = data["tofu"]
+web, db, backup = data["tofu"]
 assert (web["name"], web["kind"], web["node"], web["id"], web["cores"], web["memory"], web["disk"], web["ip"]) == \
        ("web", "LXC", "pve1", 201, "2", "2048", "16", "10.0.0.21"), web
 assert (db["kind"], db["memory"], db["disk"], db["ip"]) == ("VM", "8192", "64", "10.0.0.22"), db
@@ -25,6 +25,36 @@ assert data["roles"]["web"]["templates"] == ["site.conf.j2"]
 assert data["nodes"] == ["pve1", "pve2"] and data["playbook_prefix"] == "playbooks/"
 assert data["direct"]["guests"] == ["db", "web"]
 assert "<title>Example lab</title>" in page and "/*DATA*/" not in page
+
+# ---- drift: each kind once in the example (more.tf, the inventory's db and printer) ----
+found = {(f["kind"], f["severity"], f["machine"], f["file"], f["line"]) for f in data["findings"]}
+assert found == {
+    ("firewall_off", "warn", "backup", "tofu/more.tf", 32), ("firewall_orphan", "warn", "old", "tofu/more.tf", 69),
+    ("ip_mismatch", "warn", "db", "tofu/main.tf", 32), ("not_in_inventory", "warn", "backup", "tofu/more.tf", 4),
+    ("required_roles", "warn", "printer", "ansible/inventory/hosts.yml", 18),
+    ("firewall_no_options", "info", "db", "tofu/more.tf", 54), ("no_playbook", "info", "printer", "ansible/inventory/hosts.yml", 18),
+    ("not_in_tofu", "info", "printer", "ansible/inventory/hosts.yml", 18)}, found
+assert next(f for f in data["findings"] if f["kind"] == "ip_mismatch")["vars"] == {"name": "db", "tofu": "10.0.0.22", "inventory": "10.0.0.32"}
+fw = data["firewalls"]
+assert (fw["201"]["enabled"], fw["201"]["input_policy"], fw["203"]["enabled"], fw["202"]["options"]) == (True, "DROP", False, None)
+mod = ci.fw_state('module "fw_x" {\n  container_id = 9\n  enabled      = false # later\n  rule { enabled = true }\n}')
+assert mod == {"enabled": False, "input_policy": None}, mod
+cli = lambda *a: subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(HERE / "example/cairn-iac.json"), "--check", *a],
+                                capture_output=True, text=True)
+r = cli("--json")
+assert r.returncode == 1 and len(json.loads(r.stdout)) == 8, r
+assert "db: Tofu gives 10.0.0.22, the inventory 10.0.0.32" in cli().stdout
+
+# ---- a Tofu state or saved plan is never read (they can hold secrets) ----
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp) / "repo"
+    shutil.copytree(HERE / "example", repo)
+    marker = "LEAK-MARKER-from-the-state-file"
+    for name in ("terraform.tfstate", "terraform.tfstate.backup", "web.plan"):
+        (repo / "tofu" / name).write_text(f'resource "proxmox_virtual_environment_vm" "leak" {{\n  name = "{marker}"\n  vm_id = 9\n}}\n')
+    out = pathlib.Path(tmp) / "iac.html"
+    ci.build(repo / "cairn-iac.json", out)
+    assert marker not in out.read_text(encoding="utf-8")
 
 # ---- edits, on a copy of the example made a Git repo ----
 def refused(f, *a):

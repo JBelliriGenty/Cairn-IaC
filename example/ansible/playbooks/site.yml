@@ -1,5 +1,5 @@
 - name: Base
-  hosts: all
+  hosts: proxmox_nodes:guests
   roles:
     - base
 

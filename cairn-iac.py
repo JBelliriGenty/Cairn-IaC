@@ -6,6 +6,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 
     python3 cairn-iac.py -c cairn-iac.json -o iac.html      # static page
     python3 cairn-iac.py -c server.json --serve             # page + edits, Git commit and push
+    python3 cairn-iac.py -c cairn-iac.json --check [--json] # drift list, exit 1 on a warning (CI)
 
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
@@ -24,6 +25,8 @@ DEFAULTS = {
     "playbooks": "ansible/playbooks", "roles": "ansible/roles",
     "node_group": "proxmox_nodes", "bare_metal_group": "bare_metal",
     "generic_playbooks": [], "note": None, "links": {},
+    # Roles every inventory machine must get (drift view and --check); empty: not checked.
+    "required_roles": [],
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
@@ -44,6 +47,7 @@ SERVER = {
 }
 VM_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
 FW_RESOURCE = "proxmox_virtual_environment_firewall_rules"
+FW_OPTIONS = "proxmox_virtual_environment_firewall_options"
 
 
 def key(name):
@@ -91,16 +95,30 @@ def fw_rules(body):
     return out
 
 
+def fw_state(body):
+    """Guest firewall options written at the top of a block: enabled (True/False, None if not literal), input policy."""
+    m = re.search(r'^  enabled\s*=\s*(true|false)\s*(#.*)?$', body, re.M)
+    p = re.search(r'^  input_policy\s*=\s*"(\w+)"', body, re.M)
+    return {"enabled": m.group(1) == "true" if m else None, "input_policy": p.group(1) if p else None}
+
+
 def read_tofu(tofu_dir, repo):
-    machines, firewalls = [], {}
+    # Only *.tf at the top of tofu_dir: never a state (*.tfstate, may hold secrets) nor a saved plan.
+    machines, firewalls, options = [], {}, {}
     for tf in sorted(tofu_dir.glob("*.tf")):
         rel = tf.relative_to(repo).as_posix()
         for (kind, a, b), line, body in blocks(tf.read_text(encoding="utf-8")):
             cid = val(body, "container_id") or val(body, "vm_id")
+            if kind == "resource" and a == FW_OPTIONS and cid:
+                options[cid] = {**fw_state(body), "options": [rel, line]}
+                continue
             if is_firewall(kind, a, body) and cid:
                 label = b if kind == "resource" else a
                 fw = firewalls.setdefault(cid, {"name": re.sub(r"^(firewall|fw)_", "", label), "node": val(body, "node_name"),
-                                                "file": rel, "line": line, "rules": []})
+                                                "file": rel, "line": line, "rules": [], "module": kind == "module",
+                                                "enabled": None, "input_policy": None, "options": None})
+                if kind == "module":  # a firewall module may take its options as arguments
+                    fw.update({k: v for k, v in fw_state(body).items() if v is not None}, options=[rel, line])
                 fw["rules"] += [{"dir": d, "at": [rel, line, i], **{k: kv(body[s:e], k) for k in ("proto", "dport", "source", "dest", "comment")}}
                                 for i, (d, s, e) in enumerate(fw_rules(body))]
                 continue
@@ -116,6 +134,9 @@ def read_tofu(tofu_dir, repo):
                     "ip": ((val(body, "ip_address") or val(body, "address") or "").split("/")[0]),
                     "file": rel, "line": line, "code": body,
                 })
+    for cid, o in options.items():
+        if cid in firewalls:
+            firewalls[cid].update(o)
     return machines, firewalls
 
 
@@ -207,9 +228,65 @@ def git_rev(repo):
         return ""
 
 
+def ip_or_none(s):
+    try:
+        return ipaddress.ip_address(str(s or "").strip())
+    except ValueError:
+        return None
+
+
+def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text):
+    """Inconsistencies between Tofu, the firewalls, the inventory and the playbooks. Each finding:
+    {kind, severity (warn|info), machine (page key), file, line, msg (English template), vars}."""
+    inv_lines = inv_text.splitlines()
+    inv_line = lambda h: next((i + 1 for i, l in enumerate(inv_lines) if re.match(rf"\s+{re.escape(h)}:(\s|$)", l)), 1)
+    hosts = {key(h): h for h in ips}
+    tofu = {key(m["name"]): m for m in machines}
+    by_id = {str(m["id"]): m for m in machines if m["id"]}
+    outside = {key(h) for g in (cfg["node_group"], cfg["bare_metal_group"]) for h in groups.get(g, [])}
+    got = {}
+    for plays in playbooks.values():
+        for p in plays:
+            for h in p["hosts"]:
+                got.setdefault(key(h), set()).update(p["roles"])
+    out = []
+
+    def add(kind, sev, machine, file, line, msg, **v):
+        out.append({"kind": kind, "severity": sev, "machine": machine, "file": file, "line": line, "msg": msg, "vars": v})
+
+    for k, m in sorted(tofu.items()):
+        a, b = ip_or_none(m["ip"]), ip_or_none(ips.get(hosts.get(k)))
+        if k not in hosts:
+            add("not_in_inventory", "warn", k, m["file"], m["line"], "{name} is created by Tofu but is not in the inventory", name=m["name"])
+        elif a and b and a != b:
+            add("ip_mismatch", "warn", k, m["file"], m["line"], "{name}: Tofu gives {tofu}, the inventory {inventory}",
+                name=m["name"], tofu=str(a), inventory=str(b))
+    for k, h in sorted(hosts.items()):
+        if k not in tofu and k not in outside:
+            add("not_in_tofu", "info", k, cfg["inventory"], inv_line(h), "{name} is in the inventory but no Tofu block creates it", name=h)
+        if k not in got:
+            add("no_playbook", "info", k, cfg["inventory"], inv_line(h), "{name} is in the inventory but no playbook targets it", name=h)
+        missing = [r for r in cfg.get("required_roles") or [] if r not in got.get(k, ())]
+        if missing:
+            add("required_roles", "warn", k, cfg["inventory"], inv_line(h), "{name} does not get the required roles: {roles}",
+                name=h, roles=", ".join(missing))
+    for cid, fw in firewalls.items():
+        m = by_id.get(cid)
+        k, name = (key(m["name"]), m["name"]) if m else (key(fw["name"]), fw["name"])
+        if not m and k not in hosts:
+            add("firewall_orphan", "warn", k, fw["file"], fw["line"], "Firewall {name} targets id {id}, which matches no machine", name=name, id=cid)
+        elif fw["enabled"] is False and fw["rules"]:
+            add("firewall_off", "warn", k, *fw["options"], "{name}: the guest firewall is turned off, its rules protect nothing", name=name)
+        elif fw["options"] is None and fw["rules"]:
+            add("firewall_no_options", "info", k, fw["file"], fw["line"],
+                "{name}: rules without firewall options; Proxmox keeps a guest firewall off until it is turned on", name=name)
+    return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
+
+
 def collect(cfg, repo):
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
+    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"))
     inv_parent = (repo / cfg["inventory"]).parent.parent
     try:
         pb_prefix = (repo / cfg["playbooks"]).relative_to(inv_parent).as_posix() + "/"
@@ -222,14 +299,14 @@ def collect(cfg, repo):
         "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
-        "playbooks": playbooks, "roles": roles, "server": None,
+        "playbooks": playbooks, "roles": roles, "findings": findings, "server": None,
     }
 
 
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "server": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "server": None}
 
 
 def favicon():
@@ -258,7 +335,22 @@ def build(cfg_path, out_path):
     data = collect(cfg, (cfg["base"] / cfg["repo"]).resolve())
     out_path.write_text(render(data), encoding="utf-8", newline="\n")
     print(f"cairn-iac: {out_path} ({len(data['tofu'])} Tofu machines, {len(data['firewalls'])} firewalls, "
-          f"{len(data['ips'])} inventory hosts, {len(data['playbooks'])} playbooks, {len(data['roles'])} roles)")
+          f"{len(data['ips'])} inventory hosts, {len(data['playbooks'])} playbooks, {len(data['roles'])} roles, "
+          f"{len(data['findings'])} drift findings)")
+
+
+def check(cfg_path, as_json):
+    """Drift findings on stdout; exit status 1 if one is a warning (for CI)."""
+    cfg = load_config(cfg_path)
+    findings = collect(cfg, (cfg["base"] / cfg["repo"]).resolve())["findings"]
+    if as_json:
+        print(json.dumps(findings, ensure_ascii=False, indent=2))
+    else:
+        for f in findings:
+            print(f"{f['severity']:<5} {f['kind']:<19} {f['file']}:{f['line']}  {f['msg'].format(**f['vars'])}")
+        n = sum(f["severity"] == "warn" for f in findings)
+        print(f"cairn-iac: {n} warnings, {len(findings) - n} notes", file=sys.stderr)
+    return 1 if any(f["severity"] == "warn" for f in findings) else 0
 
 
 def escape(s):
@@ -704,6 +796,8 @@ class App:
             v = new.get(k, cur[k])
             if k == "generic_playbooks":
                 v = [name_ok(x, "playbook") for x in (v or [])]
+            elif k == "required_roles":
+                v = [name_ok(x, "role") for x in (v or [])]
             elif k in ("git", "firewall_lists", "workflow", "links", "note"):
                 if v is not None and not isinstance(v, dict):
                     raise Refused("Invalid {what}: {value}", what=k, value=type(v).__name__)
@@ -818,6 +912,10 @@ if __name__ == "__main__":
     ap.add_argument("-c", "--config", type=pathlib.Path, help="JSON config (default: none, current directory is the repo)")
     ap.add_argument("-o", "--output", type=pathlib.Path, default=pathlib.Path("iac.html"))
     ap.add_argument("--serve", action="store_true", help="serve the page with editing (see README, Server)")
+    ap.add_argument("--check", action="store_true", help="print the drift findings, exit 1 if one is a warning (CI)")
+    ap.add_argument("--json", action="store_true", help="with --check: as JSON")
     a = ap.parse_args()
     cfg_path = a.config.resolve() if a.config else None
+    if a.check:
+        sys.exit(check(cfg_path, a.json))
     serve(load_config(cfg_path)) if a.serve else build(cfg_path, a.output)

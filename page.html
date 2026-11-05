@@ -12,7 +12,7 @@
   --bg: #eef1f8; --panel: #ffffff; --fg: #131416; --muted: #5d5f60; --line: #e5e8ef; --control: #8b909a;
   --track: #eceff5; --primary: #1d1f20; --on-primary: #ffffff; --accent: #4f46e5;
   --c-pool: #0d9488; --c-temp: #db2777; --pool-ink: #0f766e; --temp-ink: #be185d;
-  --ok: #1e7b4f; --ok-bg: #dcfae5; --ok-ink: #04250e; --bad: #b42318;
+  --ok: #1e7b4f; --ok-bg: #dcfae5; --ok-ink: #04250e; --bad: #b42318; --warn: #b54708; --warn-bg: #fef0c7;
   --radius: 8px; --radius-sheet: 16px;
   --duration-stagger: 40ms; --duration-slow: 400ms; --distance-base: 8px; --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
   --tofu: var(--c-pool); --tofu-ink: var(--pool-ink); --ans: var(--c-temp); --ans-ink: var(--temp-ink);
@@ -22,7 +22,7 @@
   --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
   --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
   --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
-  --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066;
+  --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066; --warn: #fdb022; --warn-bg: #2b2111;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -30,7 +30,7 @@
     --bg: #0c0d12; --panel: #15161c; --fg: #f2f2f3; --muted: #a4a7ab; --line: #2a2c35; --control: #6b7080;
     --track: #23252e; --primary: #f2f2f3; --on-primary: #111213; --accent: #818cf8;
     --c-pool: #2dd4bf; --c-temp: #f472b6; --pool-ink: #2dd4bf; --temp-ink: #f472b6;
-    --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066;
+    --ok: #3fc07a; --ok-bg: #172a1d; --ok-ink: #3fc07a; --bad: #f97066; --warn: #fdb022; --warn-bg: #2b2111;
     color-scheme: dark;
   }
 }
@@ -207,6 +207,19 @@ pre.diff { max-height: 50vh; }
 .settings { display: flex; flex-direction: column; gap: 14px; max-width: 980px; }
 .settings h3 { margin-bottom: 2px; }
 .key { display: block; overflow-wrap: anywhere; background: var(--track); border-radius: 6px; padding: 8px 10px; }
+
+/* drift */
+.pill.warn, .badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge { margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 99px; background: var(--track); color: var(--muted); font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+.verdict a { color: inherit; text-decoration-color: var(--control); text-underline-offset: 3px; }
+.verdict a.warn { color: var(--warn); }
+.drift { grid-template-columns: minmax(0, 1fr); max-width: 980px; }
+.findings { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+.findings li { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.findings .chips .label { align-self: center; }
+.mfind { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.mfind li { padding: 2px 0 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.mfind li.warn { border-left-color: var(--warn); color: var(--fg); }
 </style>
 <div class="app">
   <aside class="side">
@@ -218,6 +231,7 @@ pre.diff { max-height: 50vh; }
       <button data-view="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n>Overview</span></button>
       <button data-view="machines"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg><span data-i18n>Machines</span></button>
       <button data-view="roles"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span data-i18n>Roles</span></button>
+      <button data-view="drift"><svg viewBox="0 0 24 24"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5h.01"/></svg><span data-i18n>Drift</span></button>
       <button data-view="settings" hidden><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span data-i18n>Settings</span></button>
     </nav>
     <div class="side-foot">
@@ -259,6 +273,11 @@ pre.diff { max-height: 50vh; }
 
     <section class="view" data-view="roles" hidden>
       <div class="card table-wrap"><table id="roles"></table></div>
+    </section>
+
+    <section class="view" data-view="drift" hidden>
+      <p class="lead" id="drift-lead"></p>
+      <div class="grid drift" id="drift-list"></div>
     </section>
 
     <section class="view" data-view="settings" hidden>
@@ -337,6 +356,31 @@ const FR = {
   "View in {name}": "Voir dans {name}", "Edit in {name}": "Modifier dans {name}",
   "Edit the inventory": "Modifier l'inventaire", "Edit the tasks": "Modifier les tâches",
   "GB": "Go", "GiB": "Gio", "MiB": "Mio",
+  // drift (messages sent by cairn-iac.py, English templates)
+  "Drift": "Écarts", "{n} drift finding": "{n} écart", "{n} drift findings": "{n} écarts",
+  "{n} warning": "{n} avertissement", "{n} warnings": "{n} avertissements", "{n} note": "{n} note", "{n} notes": "{n} notes",
+  "Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.":
+    "Là où Tofu, les pare-feux, l'inventaire et les playbooks ne concordent pas. Les avertissements d'abord ; une note peut être voulue. En CI, {cmd} liste les mêmes écarts et échoue sur un avertissement.",
+  "No drift: Tofu, the firewalls, the inventory and the playbooks agree.": "Aucun écart : Tofu, les pare-feux, l'inventaire et les playbooks concordent.",
+  "Created by Tofu, not in the inventory": "Créées par Tofu, absentes de l'inventaire",
+  "Addresses that differ": "Adresses différentes",
+  "Firewalls turned off": "Pare-feux désactivés",
+  "Firewalls for no machine": "Pare-feux sans machine",
+  "Required roles missing": "Rôles obligatoires manquants",
+  "In the inventory, not created by Tofu": "Dans l'inventaire, pas créées par Tofu",
+  "Targeted by no playbook": "Ciblées par aucun playbook",
+  "Firewall state not declared": "État du pare-feu non déclaré",
+  "{name} is created by Tofu but is not in the inventory": "{name} est créée par Tofu mais absente de l'inventaire",
+  "{name}: Tofu gives {tofu}, the inventory {inventory}": "{name} : Tofu donne {tofu}, l'inventaire {inventory}",
+  "{name} is in the inventory but no Tofu block creates it": "{name} est dans l'inventaire mais aucun bloc Tofu ne la crée",
+  "{name} is in the inventory but no playbook targets it": "{name} est dans l'inventaire mais aucun playbook ne la cible",
+  "{name} does not get the required roles: {roles}": "{name} ne reçoit pas les rôles obligatoires : {roles}",
+  "Firewall {name} targets id {id}, which matches no machine": "Le pare-feu {name} vise l'id {id}, qui ne correspond à aucune machine",
+  "{name}: the guest firewall is turned off, its rules protect nothing": "{name} : le pare-feu invité est désactivé, ses règles ne protègent rien",
+  "{name}: rules without firewall options; Proxmox keeps a guest firewall off until it is turned on": "{name} : des règles sans options de pare-feu ; Proxmox laisse le pare-feu d'un invité désactivé tant qu'on ne l'active pas",
+  "Firewall on": "Pare-feu activé", "Firewall off": "Pare-feu désactivé", "On/off left to the module": "Activation laissée au module",
+  "On/off not declared": "Activation non déclarée", "Input policy: {p}": "Politique d'entrée : {p}",
+  "Roles every inventory machine must get (comma-separated)": "Rôles que toute machine de l'inventaire doit recevoir (séparés par des virgules)",
   // server mode: forms, settings, refusals sent by the server
   "Commit {sha} sent as a pull request ({ref}). Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} envoyé en demande de fusion ({ref}). Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
   "Commit {sha} pushed on the branch {ref}: open its pull request. Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} poussé sur la branche {ref} : ouvrez sa demande de fusion. Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
@@ -516,8 +560,11 @@ $("#subtitle").textContent = D.subtitle;
 document.querySelectorAll("[data-i18n]").forEach(e => e.textContent = t(e.textContent));
 $("#meta").textContent = t("Read from the repository{rev}", {rev: D.rev ? ` · ${D.rev}` : ""}) + (S ? ` · ${S.user}` : "");
 const nAns = Object.values(M).filter(m => m.roles.length).length, nFw = Object.keys(D.firewalls).length;
-$("#verdict").textContent = [tp(D.tofu.length, "{n} machine described by Tofu", "{n} machines described by Tofu"),
-  tp(nAns, "{n} configured by Ansible", "{n} configured by Ansible"), tp(nFw, "{n} guest firewall", "{n} guest firewalls")].join(", ");
+const F = D.findings || [], nWarn = F.filter(f => f.severity === "warn").length;
+$("#verdict").innerHTML = esc([tp(D.tofu.length, "{n} machine described by Tofu", "{n} machines described by Tofu"),
+  tp(nAns, "{n} configured by Ansible", "{n} configured by Ansible"), tp(nFw, "{n} guest firewall", "{n} guest firewalls")].join(", "))
+  + (F.length ? ` · <a href="#drift"${nWarn ? ' class="warn"' : ""}>${esc(tp(F.length, "{n} drift finding", "{n} drift findings"))}</a>` : "");
+if (F.length) document.querySelector('#nav [data-view="drift"]').insertAdjacentHTML("beforeend", `<span class="badge${nWarn ? " warn" : ""}">${F.length}</span>`);
 if (D.error) $("#verdict").textContent = t("Cannot read the repository: {err}", {err: D.error}) + (EDIT ? " " + t("Check the Settings.") : "");
 if (D.note && D.note.text) $("#note").innerHTML = `<h2>${esc(D.note.title || "")}</h2><article class="card"><p class="empty">${esc(D.note.text).replace(/`([^`]+)`/g, "<code>$1</code>")}</p></article>`;
 
@@ -593,6 +640,8 @@ function renderFlow(m) {
 function renderDetail(m) {
   const tf = m.tofu;
   let h = `<div><h3>${esc(m.name)}</h3><p class="meta">${esc(m.phys ? t("Physical machine") : tf ? tf.kind : t("Guest"))}${m.node && !m.phys ? esc(t(" on {node}", {node: m.node.toUpperCase()})) : ""} · <span class="mono">${esc(m.ip || t("no IP declared"))}</span>${m.id != null ? " · id " + m.id : ""}</p></div>`;
+  const mf = F.filter(f => f.machine === m.key);
+  if (mf.length) h += `<ul class="mfind">${mf.map(f => `<li class="${f.severity}">${esc(t(f.msg, f.vars))}</li>`).join("")}</ul>`;
   h += `<section class="layer"><div class="row"><h3>${t("The box")}</h3><span class="pill t">tofu</span></div>`;
   h += tf ? `<div class="stats">
       <div class="stat"><span>vCPU</span><b>${esc(tf.cores ?? "—")}</b></div>
@@ -607,6 +656,7 @@ function renderDetail(m) {
         <button class="primary">${t("Preview")}</button></form></details>` : ""}`
     : `<p class="empty">${t(m.phys ? "Physical machine: no Tofu file creates it." : "Not described by Tofu.")}</p>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("Firewall")}</h3><span class="pill t">tofu</span></div>`;
+  if (m.fw) h += `<div class="pills"><span class="pill${m.fw.enabled === false ? " warn" : ""}">${t(m.fw.enabled === true ? "Firewall on" : m.fw.enabled === false ? "Firewall off" : m.fw.module ? "On/off left to the module" : "On/off not declared")}</span>${m.fw.input_policy ? `<span class="pill">${esc(t("Input policy: {p}", {p: m.fw.input_policy}))}</span>` : ""}</div>`;
   h += m.fw && m.fw.rules.length ? `<div class="table-wrap"><table><thead><tr><th>${t("Direction")}</th><th>${t("Port")}</th><th>${t("From / to")}</th><th>${t("Why")}</th>${EDIT ? "<th></th>" : ""}</tr></thead><tbody>${m.fw.rules.map((r, i) =>
       `<tr><td>${t(r.dir === "out" ? "Out" : "In")}</td><td class="mono" data-label="${t("Port")}">${esc((r.proto || "") + (r.dport ? "/" + r.dport : ""))}</td><td class="mono" data-label="${t("From / to")}">${esc((r.dir === "out" ? r.dest : r.source) || t("anywhere"))}</td><td class="wrap" data-label="${t("Why")}">${esc(r.comment)}</td>${EDIT ? `<td><button class="small ghost" data-del="${i}">${t("Remove")}</button></td>` : ""}</tr>`).join("")}</tbody></table></div>${linkRow(m.fw.file, m.fw.line)}`
     : `<p class="empty">${t(m.fw ? "Firewall declared without rules of its own." : "No guest firewall in the repository.")}</p>`;
@@ -709,6 +759,7 @@ const FORM = [
   ["Repository layout", [["tofu_dir", "Tofu directory"], ["inventory", "Ansible inventory"], ["playbooks", "Playbooks directory"], ["roles", "Roles directory"]]],
   ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Group of the physical machines outside the cluster"],
     ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
+  ["Drift", [["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
   ["Path of a change", [["workflow.example", "Machine shown first"], ["workflow.workstation", "Workstation"], ["workflow.tofu", "Tofu command"],
     ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
     ["workflow.controller_path", "Repository path on the controller"], ["workflow.ansible", "Ansible command"]]],
@@ -727,7 +778,7 @@ function renderSettings() {
     if (type === "text") return `<label class="wide">${esc(label)}<textarea id="${id}" data-p="${p}">${esc(v)}</textarea></label>`;
     if (type === "mode") return `<label class="wide">${esc(label)}<select id="${id}" data-p="${p}">${[["push", "Pushed onto the branch"], ["agit", "Pull request opened by the push (Forgejo, Gitea: AGit)"], ["branch", "Pushed onto a new branch, pull request opened by hand"]].map(([k, l]) => `<option value="${k}"${(v || "push") === k ? " selected" : ""}>${esc(t(l))}</option>`).join("")}</select></label>`;
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
-    return `<label${/url|text|generic/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
+    return `<label${/url|text|generic|required/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
   };
   $("#settings").innerHTML = FORM.map(([title, fs]) => `<article class="card"><h3>${t(title)}</h3><div class="form">${fs.map(field).join("")}</div></article>`).join("")
     + `<article class="card"><h3>${t("Deploy key")}</h3><p class="sub">${t("Give this key write access to the repository (a deploy key on the Git server), for an ssh:// remote.")}</p>
@@ -770,8 +821,21 @@ $("#nodes").addEventListener("click", e => {
 $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><th>${t("Machines")}</th></tr></thead><tbody>${Object.keys(D.roles).sort((a, b) => (roleUse[b] || []).length - (roleUse[a] || []).length || a.localeCompare(b)).map(r =>
   `<tr><td><code>${esc(r)}</code></td><td class="num" data-label="${t("Tasks")}">${D.roles[r].tasks.length}</td><td class="wrap" data-label="${t("Machines")}"><div class="chips">${(roleUse[r] || []).sort().map(k => `<a class="chip" href="#${k}">${esc(M[k].name)}</a>`).join("") || `<span class="label">${t("None, or included by another role")}</span>`}</div></td></tr>`).join("")}</tbody>`;
 
-// ---------- views and address (#overview, #machines, #roles, #<machine>) ----------
-const VIEWS = ["overview", "machines", "roles", ...(EDIT ? ["settings"] : [])];
+// ---------- drift: findings of cairn-iac.py, grouped by kind, warnings first ----------
+const KINDS = {not_in_inventory: "Created by Tofu, not in the inventory", ip_mismatch: "Addresses that differ", firewall_off: "Firewalls turned off",
+  firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", not_in_tofu: "In the inventory, not created by Tofu",
+  no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared"};
+$("#drift-lead").innerHTML = esc(t("Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.", {cmd: "\u0000"})).replace("\u0000", code("cairn-iac.py --check"));
+const byKind = {};
+for (const f of F) (byKind[f.kind] ||= []).push(f);
+$("#drift-list").innerHTML = Object.entries(byKind).map(([k, fs]) => {
+  const warn = fs[0].severity === "warn";
+  return `<article class="card"><div class="row"><h3>${esc(t(KINDS[k] || k))}</h3><span class="pill${warn ? " warn" : ""}">${esc(warn ? tp(fs.length, "{n} warning", "{n} warnings") : tp(fs.length, "{n} note", "{n} notes"))}</span></div>
+    <ul class="findings">${fs.map(f => `<li><span>${esc(t(f.msg, f.vars))}</span><div class="chips">${M[f.machine] ? `<a class="chip" href="#${esc(f.machine)}">${esc(M[f.machine].name)}</a>` : ""}${f.file ? links(f.file, f.line) + `<span class="label mono">${esc(f.file)}:${f.line}</span>` : ""}</div></li>`).join("")}</ul></article>`;
+}).join("") || `<article class="card"><p class="empty">${t("No drift: Tofu, the firewalls, the inventory and the playbooks agree.")}</p></article>`;
+
+// ---------- views and address (#overview, #machines, #roles, #drift, #<machine>) ----------
+const VIEWS = ["overview", "machines", "roles", "drift", ...(EDIT ? ["settings"] : [])];
 if (EDIT) {
   document.querySelector('#nav [data-view="settings"]').hidden = false;
   renderSettings();

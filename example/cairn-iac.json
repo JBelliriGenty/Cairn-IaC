@@ -2,6 +2,7 @@
   "repo": ".",
   "title": "Example lab",
   "subtitle": "example/",
+  "required_roles": ["base"],
   "workflow": {
     "workstation": "your laptop",
     "git_server": "the Git server",
