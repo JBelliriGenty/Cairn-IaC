@@ -403,8 +403,10 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
     for n, c in (cap or {}).items():
         for f, what, scale in CAP:
             if c["total"].get(f) is not None and c[f] > c["total"][f]:
+                if f == "disk" and c[f] >= 1024:  # as the page shows it: TB of 1024 GB
+                    scale, what = 1024, "TB of disk"
                 add("over_allocated", "warn", n, "", 0, "{node} gives its guests {used} {what}, more than the {total} declared",
-                    node=c["name"], used=f"{c[f] / scale:g}", total=f"{c['total'][f] / scale:g}", what=what)
+                    node=c["name"], used=f"{round(c[f] / scale, 2):g}", total=f"{round(c['total'][f] / scale, 2):g}", what=what)
     return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
 
 

@@ -391,7 +391,7 @@ const FR = {
   "Other": "Autres",
   "View in {name}": "Voir dans {name}", "Edit in {name}": "Modifier dans {name}",
   "Edit the inventory": "Modifier l'inventaire", "Edit the tasks": "Modifier les tâches",
-  "GB": "Go", "GiB": "Gio", "MiB": "Mio",
+  "GB": "Go", "TB": "To", "GiB": "Gio", "MiB": "Mio",
   // drift (messages sent by cairn-iac.py, English templates)
   "Drift": "Écarts", "{n} drift finding": "{n} écart", "{n} drift findings": "{n} écarts",
   "{n} warning": "{n} avertissement", "{n} warnings": "{n} avertissements", "{n} note": "{n} note", "{n} notes": "{n} notes",
@@ -435,7 +435,7 @@ const FR = {
   "Not a literal number in Tofu (a variable?): {list}": "Pas un nombre littéral dans Tofu (une variable ?) : {list}",
   "Nodes over their capacity": "Nœuds au-delà de leur capacité",
   "{node} gives its guests {used} {what}, more than the {total} declared": "{node} donne à ses invités {used} {what}, plus que les {total} déclarés",
-  "GiB of memory": "Gio de mémoire", "GB of disk": "Go de disque",
+  "GiB of memory": "Gio de mémoire", "GB of disk": "Go de disque", "TB of disk": "To de disque",
   "Node capacity": "Capacité des nœuds",
   "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.":
     "Ce que chaque nœud peut donner à ses invités ; vide : la carte ne montre que les sommes. Un nœud au-delà de sa capacité est un avertissement d'écart.",
@@ -621,12 +621,14 @@ const tile = m => `<button class="m${m.phys ? " phys" : ""}" data-k="${m.key}" a
 const mem = mb => !mb ? "—" : mb >= 1024 ? `${(mb / 1024).toLocaleString(locale)} ${t("GiB")}` : `${mb} ${t("MiB")}`;
 const disk = gb => gb ? `${gb} ${t("GB")}` : "—";
 // capacity of a node: sums of what Tofu gives its guests, against the declared total (Settings) when there is one
-const CAPF = [["cores", "vCPU", n => n], ["memory", "Memory", mem], ["disk", "Disk", disk]];
+// disk in TB (of 1024 GB, as Proxmox counts) once the node's figures reach 1 TB, both sides of a row in the same unit
+const tb = (gb, big) => big >= 1024 ? `${(gb / 1024).toLocaleString(locale, {maximumFractionDigits: 2})} ${t("TB")}` : disk(gb);
+const CAPF = [["cores", "vCPU", n => n], ["memory", "Memory", mem], ["disk", "Disk", tb]];
 const capBlock = n => {
   const c = (D.capacity || {})[n];
   return !c ? "" : `<div class="cap">${CAPF.map(([f, label, fmt]) => {
     const used = c[f], tot = c.total[f], unk = c.unknown[f], pct = tot ? used / tot * 100 : 0;
-    return `<div class="meter${pct > 100 ? " bad" : pct > 80 ? " warn" : ""}"><div class="row"><span class="label">${t(label)}</span><span class="label"><b>${esc(fmt(used))}</b>${tot ? " / " + esc(fmt(tot)) : ""}${unk.length ? ` <span title="${esc(t("Not a literal number in Tofu (a variable?): {list}", {list: unk.join(", ")}))}">+ ${esc(tp(unk.length, "{n} unknown", "{n} unknown"))}</span>` : ""}</span></div>${tot ? `<div class="bar thin"><i style="width:${Math.min(pct, 100).toFixed(1)}%"></i></div>` : ""}</div>`;
+    return `<div class="meter${pct > 100 ? " bad" : pct > 80 ? " warn" : ""}"><div class="row"><span class="label">${t(label)}</span><span class="label"><b>${used ? esc(fmt(used, Math.max(used, tot || 0))) : 0}</b>${tot ? " / " + esc(fmt(tot, Math.max(used, tot))) : ""}${unk.length ? ` <span title="${esc(t("Not a literal number in Tofu (a variable?): {list}", {list: unk.join(", ")}))}">+ ${esc(tp(unk.length, "{n} unknown", "{n} unknown"))}</span>` : ""}</span></div>${tot ? `<div class="bar thin"><i style="width:${Math.min(pct, 100).toFixed(1)}%"></i></div>` : ""}</div>`;
   }).join("")}</div>`;
 };
 const colNodes = [...new Set([...nodeKeys, ...Object.values(M).map(m => m.node).filter(Boolean)])];

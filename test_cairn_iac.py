@@ -60,6 +60,8 @@ c = ci.capacity([{"name": "a", "node": "N1", "cores": "var.cores", "memory": "20
 assert (c["n1"]["cores"], c["n1"]["unknown"], c["n1"]["memory"], c["n2"]["total"]) ==        (0, {"cores": ["a"], "memory": [], "disk": ["a"]}, 2048, {"cores": 4, "memory": 3072}), c
 f = ci.drift({**ci.DEFAULTS}, [], {}, {}, {}, {}, "", cap={"n": {**c["n1"], "name": "N", "total": {"memory": 1024}}})
 assert [x["msg"].format(**x["vars"]) for x in f] == ["N gives its guests 2 GiB of memory, more than the 1 declared"], f
+f = ci.drift({**ci.DEFAULTS}, [], {}, {}, {}, {}, "", cap={"n": {**c["n1"], "name": "N", "disk": 1100, "total": {"disk": 1024}}})
+assert [x["msg"].format(**x["vars"]) for x in f] == ["N gives its guests 1.07 TB of disk, more than the 1 declared"], f
 
 # ---- machines merged from Tofu, the firewalls and the inventory ----
 mm = {m["key"]: m for m in data["machines"]}

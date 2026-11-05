@@ -101,7 +101,7 @@ the column says how many guests are unknown, and which ones on hover. Only
 the first `disk_size`/`size` of a block is read (a VM with several disks
 counts its first one).
 
-With `node_capacity` (`{node: {cores, memory, disk}}`, memory in GiB, disk in GB, in the
+With `node_capacity` (`{node: {cores, memory, disk}}`, memory in GiB, disk in GB (shown in TB of 1024 GB once a node reaches it), in the
 config or in Settings), each sum gets a bar against the node's capacity:
 amber past 80 %, red past 100 %, and a node over its capacity is a drift
 warning. vCPU are often overcommitted on purpose: declare the number you
