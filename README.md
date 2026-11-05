@@ -26,7 +26,8 @@ It reads files only: it never runs `tofu` or `ansible`, needs no state file
 and no credentials. It never reads a Tofu state (`*.tfstate`,
 `*.tfstate.backup`) or a saved plan (`*.plan`), which can hold secrets:
 only `*.tf` files. An optional server mode adds editing from the page,
-committed and pushed to Git (see Server). The output is a single self-contained page (no external
+committed and pushed to Git, including a new machine copied from an existing
+one (see Server). The output is a single self-contained page (no external
 script, font or request), to open locally or serve from anywhere.
 
 > Interface in English and French. Issues and pull requests are welcome.
@@ -238,8 +239,38 @@ plus `git` and `ssh`). Each machine gets forms to:
   `hosts` is exactly that machine in the chosen playbook, else as a new play
   at its end.
 
-Every edit is shown as a diff first; the file is parsed again to check the
-result. Then it is committed, **authored by the signed-in user** (the
+A **New machine** page (and a "New machine from this one" link on each
+Tofu machine) copies a model, picked among the Tofu machines, in one
+commit:
+
+- its Tofu block, appended to the same file with the new name (`hostname`
+  or `name`, and the block label made from it), `vm_id`, `node_name`,
+  address (same prefix length and gateway as the model), vCPU, memory and
+  disk, a `description` and the model's name in `tags` replaced; the
+  comments naming the model are left out, a comment with the description
+  goes above;
+- its guest firewall block(s) (rules resource and options resource, or the
+  firewall module call), renamed and pointed at the new id, node and
+  `depends_on`, the model's own address in its rules replaced; with the
+  model's rules, or with none of its own (a module keeps its common rules);
+- the host in the inventory groups picked (the model's direct groups by
+  default), with its `ansible_host` in the group where the model has its
+  own; optionally a role in a playbook, as above.
+
+It refuses rather than guesses: the name must be new to Tofu and the
+inventory, the `vm_id` unused by any Tofu block (100 to 999999999), the
+node a known one, the address a host address of the model's network that
+no tracked file of the repository names yet (`git grep`), the resources
+within the limits; the model's name, id, node, address and changed
+resources must be literal values, and its code must not refer to other
+resources of its own (a cloud-init file, say). The files are parsed again:
+the new machine must appear exactly once in Tofu, its firewall once, the
+host once in the inventory. **Nothing is created** until you plan and apply
+the new blocks: the preview shows the `tofu plan -target=… -target=…`
+and `apply` commands, then run the playbooks on the new host.
+
+Every edit is shown as a diff first (all files of the commit); the files
+are parsed again to check the result. Then it is committed, **authored by the signed-in user** (the
 proxy's `Remote-Name` / `Remote-Email`, else the user name), committed by
 the server's identity, and pushed. A refused push leaves nothing behind:
 the clone is reset to the remote. It still never runs `tofu` or

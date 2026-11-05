@@ -173,9 +173,10 @@ with tempfile.TemporaryDirectory() as tmp:
     cfg = ci.load_config(repo / "cairn-iac.json")
 
     def run(op):
-        rel, old, new, msg = ci.apply(op, cfg, repo)
-        (repo / rel).write_text(new, encoding="utf-8", newline="")
-        return msg
+        r = ci.apply(op, cfg, repo)
+        for rel, old, new in r["files"]:
+            (repo / rel).write_text(new, encoding="utf-8", newline="")
+        return r["message"]
 
     # resources: VM nested blocks (cpu.cores, memory.dedicated, disk.size)
     assert run({"op": "resources", "file": "tofu/main.tf", "line": 32, "name": "db", "cores": 6, "memory": 16384, "disk": 80}) == \
@@ -306,5 +307,197 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [c["subject"] for c in h["commits"]] == ["site: base on web"] and h["truncated"] and h["since"] == "2026-01-01", h
     h = app2.history("db")  # the boundary commit carries every line of the files: not listed, the history is cut there
     assert h["truncated"] and h["shallow"] and h["commits"] == [] and h["depth"] == 3, h
+
+# ---- a new machine from a model: Tofu block, guest firewall, inventory groups, a role; one commit ----
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp) / "repo"
+    shutil.copytree(HERE / "example", repo)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout
+    git("init", "-q", "-b", "main"); git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    cfg = ci.load_config(repo / "cairn-iac.json")
+    web = {"op": "new_machine", "model": "proxmox_virtual_environment_container.web", "name": "cache", "host": "cache",
+           "description": "Cache server", "vm_id": 204, "node": "PVE2", "ip": "10.0.0.24", "cores": 1, "memory": 1024, "disk": 8,
+           "rules": True, "groups": ["guests"], "playbook": "site", "role": "web"}
+    # provider resources: the container, its firewall rules and options copied; the inventory and a playbook, all in one edit
+    r = ci.apply(web, cfg, repo)
+    assert [f[0] for f in r["files"]] == ["tofu/main.tf", "ansible/inventory/hosts.yml", "ansible/playbooks/site.yml"], r["files"]
+    assert r["message"] == "cache: new LXC 204 on pve2, 10.0.0.24 (model web)", r["message"]
+    assert r["targets"] == ["proxmox_virtual_environment_container.cache", "proxmox_virtual_environment_firewall_rules.cache",
+                            "proxmox_virtual_environment_firewall_options.cache"], r["targets"]
+    for rel, old, new in r["files"]:
+        assert new.startswith(old.rstrip()) or not rel.endswith(".tf"), rel  # Tofu: appended, the rest untouched
+        (repo / rel).write_text(new, encoding="utf-8", newline="")
+    tf = (repo / "tofu/main.tf").read_text(encoding="utf-8")
+    assert '# cache: Cache server\nresource "proxmox_virtual_environment_container" "cache" {\n  node_name = "pve2"\n  vm_id     = 204\n  tags      = ["cache"]\n' in tf, tf
+    assert 'address = "10.0.0.24/24"' in tf and 'gateway = "10.0.0.1"' in tf.partition('# cache:')[2] and "# Web server" not in tf.partition('# cache:')[2]
+    ms, fws = ci.read_tofu(repo / "tofu", repo)
+    c = next(m for m in ms if m["name"] == "cache")
+    assert (c["id"], c["node"], c["ip"], c["cores"], c["memory"], c["disk"]) == (204, "pve2", "10.0.0.24", "1", "1024", "8"), c
+    assert [(x["dir"], x["dport"], x["dest"]) for x in fws["204"]["rules"]] == [("in", "443", None), ("out", "5432", "10.0.0.22/32")]
+    assert (fws["204"]["enabled"], fws["204"]["input_policy"], fws["204"]["name"]) == (True, "DROP", "cache")
+    groups, direct, ips, pbs, roles = ci.read_ansible(cfg, repo)
+    assert ips["cache"] == "10.0.0.24" and "cache" in direct["guests"] and pbs["site"][-1] == {"hosts": ["cache"], "roles": ["web"]}
+    m = {x["key"]: x for x in ci.collect(cfg, repo)["machines"]}["cache"]
+    assert (m["firewall"], m["host"], m["roles"]) == ("204", "cache", ["base", "web"]), m
+    # no rule copied: the firewall blocks stay (on, DROP), empty
+    r = ci.apply({**web, "name": "cache2", "host": "cache2", "vm_id": 205, "ip": "10.0.0.25", "rules": False, "playbook": "", "role": ""}, cfg, repo)
+    tf2 = r["files"][0][2].split('"cache2"')[1]
+    assert "rule {" not in tf2 and "HTTPS" not in tf2 and len(r["files"]) == 2, tf2
+    for rel, old, new in r["files"]:
+        (repo / rel).write_text(new, encoding="utf-8", newline="")
+    fws = ci.read_tofu(repo / "tofu", repo)[1]
+    assert fws["205"]["rules"] == [] and fws["205"]["enabled"] is True
+    # a VM model, its firewall rules without options; the disk may be smaller than the model's
+    r = ci.apply({**web, "model": "proxmox_virtual_environment_vm.db", "name": "db2", "host": "db2", "vm_id": 206, "ip": "10.0.0.26", "disk": 20}, cfg, repo)
+    assert r["targets"] == ["proxmox_virtual_environment_vm.db2", "proxmox_virtual_environment_firewall_rules.db2"], r["targets"]
+
+    # every refusal
+    no = lambda **kw: refused(ci.apply, {**web, "name": "x9", "host": "x9", "vm_id": 290, "ip": "10.0.0.90", **kw}, cfg, repo)
+    assert "Unknown machine" in no(model="module.nope")
+    assert "already exists" in no(name="WEB", host="web") and "already exists" in no(name="printer", host="printer")
+    assert "already exists" in no(name="old", host="old")  # a firewall's name
+    assert "inventory name" in no(host="x8")
+    assert "Invalid name" in no(name="9x", host="9x") and "Invalid name" in no(name="a b")
+    assert "description" in no(description="") and "description" in no(description='a "b"')
+    assert "already used in Tofu" in no(vm_id=203) and "already used in Tofu" in no(vm_id=299)  # 299: a firewall's id
+    assert "between" in no(vm_id=50) and "Invalid vm_id" in no(vm_id="x")
+    assert "Unknown node" in no(node="pve9")
+    assert "model's network" in no(ip="10.0.1.5") and "model's network" in no(ip="10.0.0.1") and "model's network" in no(ip="10.0.0.255")
+    assert "already used in the repository (ansible/inventory/hosts.yml:" in no(ip="10.0.0.40")
+    assert "Invalid address" in no(ip="10.0.0.300")
+    assert "at least one" in no(groups=[]) and "not found" in no(groups=["proxmox_nodes"]) and "not found" in no(groups=["nope"])
+    assert "Unknown role" in no(role="nope")
+    assert "between" in no(cores=0)
+
+    # the server: one commit with every file, the diff of all of them, the commands to run
+    app = ci.App({**cfg, "data_dir": str(pathlib.Path(tmp) / "data"), "repo": str(repo), "base": repo})
+    git("checkout", "-q", "--", ".")
+    class Req:
+        headers = {}
+    op = {**web, "rev": app.head(repo)}
+    p = app.edit(Req, "ada", op, False)
+    assert p["files"] == ["tofu/main.tf", "ansible/inventory/hosts.yml", "ansible/playbooks/site.yml"] and p["diff"].count("+++ b/") == 3, p
+    assert p["targets"][0] == "proxmox_virtual_environment_container.cache"
+    out = app.edit(Req, "ada", op, True)
+    assert out["ok"] and out["targets"] == p["targets"]
+    assert git("show", "--name-only", "--format=%an|%s", "HEAD").split() == [
+        "ada|cache:", "new", "LXC", "204", "on", "pve2,", "10.0.0.24", "(model", "web)",
+        "ansible/inventory/hosts.yml", "ansible/playbooks/site.yml", "tofu/main.tf"]
+    assert "already exists" in refused(app.edit, Req, "ada", {**op, "rev": app.head(repo)}, False)
+
+# module models: the machine and its firewall module (rules lists, depends_on, its own address in a rule)
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp)
+    (repo / "tofu").mkdir()
+    (repo / "inv").mkdir()
+    (repo / "pb").mkdir()
+    (repo / "roles").mkdir()
+    (repo / "tofu/main.tf").write_text('''# The proxy, in front of everything.
+module "proxy" {
+  source    = "./modules/lxc"
+  node_name = "N1"
+
+  vm_id       = 110
+  hostname    = "PROXY"
+  description = "Reverse proxy"
+
+  cores     = 2
+  memory    = 2048
+  disk_size = 8 # proxy logs rotate
+
+  ip_address = "192.168.5.66/24"
+  gateway    = "192.168.5.1"
+  # n1 has vmbr0 only
+  bridge = "vmbr0"
+
+  tags = ["proxy", "opentofu"]
+}
+
+module "dhcp_box" {
+  source     = "./modules/lxc"
+  node_name  = "N1"
+  vm_id      = 111
+  hostname   = "DHCPBOX"
+  cores      = 1
+  ip_address = "dhcp"
+}
+
+module "templated" {
+  source     = "./modules/lxc"
+  node_name  = "N1"
+  vm_id      = var.templated_id
+  hostname   = "TEMPLATED"
+  ip_address = "192.168.5.70/24"
+}
+
+resource "proxmox_virtual_environment_vm" "app" {
+  node_name = "N1"
+  vm_id     = 112
+  name      = "APP"
+  initialization {
+    ip_config {
+      ipv4 {
+        address = "192.168.5.71/24"
+      }
+    }
+    user_data_file_id = proxmox_virtual_environment_file.app_cloud_init.id
+  }
+}
+''', encoding="utf-8")
+    (repo / "tofu/firewall.tf").write_text('''# --- PROXY (110) ---
+module "firewall_proxy" {
+  source = "./modules/guest-firewall"
+
+  node_name    = "N1"
+  container_id = 110
+  enabled      = true
+  depends_on   = [module.proxy]
+
+  inbound_rules = [
+    { comment = "HTTPS", proto = "tcp", dport = "443" },
+    # metrics, from the monitoring box only
+    { comment = "Metrics", proto = "tcp", dport = "8082", source = "192.168.5.65/32", dest = "192.168.5.66/32" },
+  ]
+
+  extra_egress_rules = [
+    { comment = "Backends", proto = "tcp", dport = "8080", dest = "192.168.5.0/24" },
+  ]
+}
+''', encoding="utf-8")
+    (repo / "inv/hosts.yml").write_text("all:\n  children:\n    nodes:\n      hosts:\n        n1:\n          ansible_host: 192.168.5.51\n"
+                                        "    agents:\n      hosts:\n        proxy:\n    lxc:\n      hosts:\n        proxy:\n          ansible_host: 192.168.5.66\n", encoding="utf-8")
+    (repo / "c.json").write_text(json.dumps({"inventory": "inv/hosts.yml", "playbooks": "pb", "roles": "roles", "node_group": "nodes"}))
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout
+    git("init", "-q", "-b", "main"); git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    cfg = ci.load_config(repo / "c.json")
+    px = {"op": "new_machine", "model": "module.proxy", "name": "GATE-2", "host": "gate-2", "description": "Second gate",
+          "vm_id": 120, "node": "n1", "ip": "192.168.5.80", "rules": True, "groups": ["agents", "lxc"]}
+    r = ci.apply(px, cfg, repo)
+    files = {rel: new for rel, old, new in r["files"]}
+    assert r["targets"] == ["module.gate_2", "module.firewall_gate_2"] and list(files) == ["tofu/main.tf", "tofu/firewall.tf", "inv/hosts.yml"], r
+    m = files["tofu/main.tf"].split("# GATE-2: Second gate\n")[1]
+    assert m.startswith('module "gate_2" {\n  source    = "./modules/lxc"\n  node_name = "N1"\n\n  vm_id       = 120\n  hostname    = "GATE-2"\n  description = "Second gate"\n'), m
+    assert 'ip_address = "192.168.5.80/24"' in m and "disk_size = 8 # proxy logs rotate" not in m and "disk_size = 8\n" in m
+    assert "# n1 has vmbr0 only" in m and 'tags = ["gate-2", "opentofu"]' in m, m
+    f = files["tofu/firewall.tf"].split("# GATE-2: guest firewall\n")[1]
+    assert f.startswith('module "firewall_gate_2" {') and "depends_on   = [module.gate_2]" in f and "container_id = 120" in f, f
+    assert 'dest = "192.168.5.80/32"' in f and "# metrics, from the monitoring box only" in f and f.count("comment =") == 3, f
+    assert "    gate-2:\n" in files["inv/hosts.yml"].split("lxc:")[1] and "ansible_host: 192.168.5.80" in files["inv/hosts.yml"].split("lxc:")[1]
+    assert "ansible_host: 192.168.5.80" not in files["inv/hosts.yml"].split("lxc:")[0]  # the address where the model has its own
+    # without the rules: the module call keeps its options, the lists and their comments go
+    f = {rel: new for rel, old, new in ci.apply({**px, "rules": False}, cfg, repo)["files"]}["tofu/firewall.tf"].split("# GATE-2: guest firewall\n")[1]
+    assert f == 'module "firewall_gate_2" {\n  source = "./modules/guest-firewall"\n\n  node_name    = "N1"\n  container_id = 120\n  enabled      = true\n  depends_on   = [module.gate_2]\n}\n', f
+    # refused rather than guessed: no static address, an id that is a variable, a reference to the model's own resources
+    assert "no literal address" in refused(ci.apply, {**px, "model": "module.dhcp_box"}, cfg, repo)
+    assert "vm_id" in refused(ci.apply, {**px, "model": "module.templated"}, cfg, repo)
+    assert "own resources (user_data_file_id" in refused(ci.apply, {**px, "model": "proxmox_virtual_environment_vm.app", "ip": "192.168.5.81"}, cfg, repo)
+    # tofu fmt agrees with the generated HCL, when tofu is installed
+    if shutil.which("tofu"):
+        for rel, new in files.items():
+            if rel.endswith(".tf"):
+                (repo / rel).write_text(new, encoding="utf-8", newline="\n")
+        fmt = subprocess.run(["tofu", "fmt", "-check", "-diff", str(repo / "tofu")], capture_output=True, text=True)
+        assert fmt.returncode == 0, fmt.stdout + fmt.stderr
+
 assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
 print("ok")

@@ -12,7 +12,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
 """
-import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, threading, time, urllib.parse
+import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, tempfile, threading, time, urllib.parse
 
 try:
     import yaml
@@ -163,7 +163,7 @@ def read_tofu(tofu_dir, repo):
                 machines.append({
                     "name": name, "kind": "LXC" if (kind == "module" or a.endswith("container")) else "VM",
                     "address": f"module.{a}" if kind == "module" else f"{a}.{b}",
-                    "node": val(body, "node_name"), "id": int(val(body, "vm_id") or 0) or None,
+                    "node": val(body, "node_name"), "id": num(val(body, "vm_id")) or None,
                     "cores": val(body, "cores"), "memory": val(body, "memory") or val(body, "dedicated"),
                     "disk": val(body, "disk_size") or val(body, "size"),
                     "ip": ((val(body, "ip_address") or val(body, "address") or "").split("/")[0]),
@@ -600,7 +600,7 @@ def edit_block(text, line, fn):
     raise Refused("No block at line {line}: the file changed, reload the page", line=line)
 
 
-def set_resources(body, values):
+def set_resources(body, values, grow_only=True):
     done = []
     for f, v in values.items():
         if v in (None, ""):
@@ -619,7 +619,7 @@ def set_resources(body, values):
         else:
             raise Refused("No literal value for {what} in the block (variable?): edit it in the file", what=f)
         old = int(m.group(3))
-        if f == "disk" and v < old:
+        if f == "disk" and v < old and grow_only:
             raise Refused("A disk cannot shrink ({old} → {new} GB)", old=old, new=v)
         if v != old:
             body = body[:m.start(3)] + str(v) + body[m.end(3):]
@@ -827,9 +827,254 @@ def role_add(text, host, role):
     return out
 
 
+def playbook_edit(cfg, repo, pb, role, host):
+    """(repo-relative playbook, old text, new text): the role given to the host in that playbook."""
+    name_ok(pb, "playbook"), name_ok(role, "role")
+    path = repo / cfg["playbooks"] / f"{pb}.yml"
+    if not path.is_file():
+        raise Refused("Unknown file: {file}", file=f"{pb}.yml")
+    if not (repo / cfg["roles"] / role).is_dir():
+        raise Refused("Unknown role: {role}", role=role)
+    old = path.read_text(encoding="utf-8")
+    return (pathlib.PurePosixPath(cfg["playbooks"]) / f"{pb}.yml").as_posix(), old, role_add(old, host, role)
+
+
+# ---------- a new machine, copied from a model: its Tofu block, its guest firewall, its inventory groups ----------
+
+GUEST_IDS = (100, 999999999)  # what Proxmox accepts as a guest id
+
+
+def split_comment(line):
+    """(code, comment) of an HCL line; a # or // inside a string is code."""
+    q = False
+    for i, c in enumerate(line):
+        if c == '"' and line[i - 1:i] != "\\":
+            q = not q
+        elif not q and (c == "#" or line[i:i + 2] == "//"):
+            return line[:i], line[i:]
+    return line, ""
+
+
+def words(*names):
+    """A machine's names as words of HCL code, any case, `-` = `_`, also inside an identifier (`x_cloud_init`)."""
+    alts = {"[-_]".join(map(re.escape, re.split(r"[-_]", key(n)))) for n in names if n}
+    return re.compile(rf"(?<![A-Za-z0-9])({'|'.join(sorted(alts))})(?![A-Za-z0-9])", re.I)
+
+
+def scrub(body, pat):
+    """The block without the comments naming the model (a comment-only line goes, a trailing comment is cut)."""
+    out = []
+    for l in body.split("\n"):
+        code, com = split_comment(l)
+        if com and pat.search(com):
+            if not code.strip():
+                continue
+            l = code.rstrip()
+        out.append(l)
+    return "\n".join(out)
+
+
+def leftover(body, pat):
+    """First line whose code (strings and comments aside) still names the model: a reference to its other resources."""
+    for l in body.split("\n")[1:]:
+        if pat.search(re.sub(r'"(?:[^"\\]|\\.)*"', '""', split_comment(l)[0])):
+            return l.strip()
+    return None
+
+
+def set_lit(body, k, v, what=None):
+    """The first literal `k = "…"` (or `k = 123` for an int v) of a block set to v; refused when not a literal."""
+    q, inner = ('"', r'[^"$%\n]*') if isinstance(v, str) else ("", r"\d+")
+    m = re.search(rf'^(\s*{k}\s*=\s*){q}({inner}){q}[ \t]*(#.*)?$', body, re.M)
+    if not m:
+        raise Refused("No literal value for {what} in the block (variable?): edit it in the file", what=what or k)
+    return body[:m.start(2)] + str(v) + body[m.end(2):]
+
+
+def fw_strip(body):
+    """A firewall block without its own rules (and the comments among them): provider `rule` blocks, module lists."""
+    body = re.sub(r'^  rule \{.*?\n  \}\n' if body.startswith(f'resource "{FW_RESOURCE}"') else r'^  \w+_rules\s*=\s*\[.*?^  \]\n|^  \w+_rules\s*=\s*\[\s*\]\n',
+                  "", body, flags=re.S | re.M)
+    body = "\n".join(l for l in body.split("\n") if not l.lstrip().startswith(("#", "//")))
+    return re.sub(r"\n\n+(?=\}$)", "\n", re.sub(r"\n{3,}", "\n\n", body))
+
+
+def append(text, block):
+    nl = "\r\n" if "\r\n" in text else "\n"
+    return (text.rstrip() + "\n\n" + block + "\n").replace("\r\n", "\n").replace("\n", nl)
+
+
+def ip_used(repo, ip):
+    """First `file:line` of the repository (tracked files) naming this address, None if none."""
+    pat = r"(^|[^0-9A-Fa-f.:])" + re.escape(str(ip)).replace("\\.", "[.]") + r"([^0-9A-Fa-f]|$)"
+    r = subprocess.run(["git", "-C", str(repo), "grep", "-n", "-I", "-E", "-e", pat, "--", "."], capture_output=True, encoding="utf-8", errors="replace")
+    if r.returncode not in (0, 1):
+        raise Refused("git {cmd}: {err}", cmd="grep", err=r.stderr.strip()[-400:])
+    return ":".join(r.stdout.split(":", 2)[:2]) if r.stdout else None
+
+
+def new_machine(op, cfg, repo):
+    """A new machine from a model: its Tofu block (and guest firewall) copied at the end of their files with the new
+    name, id, node, address and resources, the host added to inventory groups, a role optionally. Refused rather than
+    guessed: every value it changes must be a literal of the model, and the result is parsed again."""
+    tofu_dir = repo / cfg["tofu_dir"]
+    machines, firewalls = read_tofu(tofu_dir, repo)
+    model = next((m for m in machines if m["address"] == op.get("model")), None)
+    if not model:
+        raise Refused("Unknown machine: {name}", name=str(op.get("model"))[:64])
+    name, host = name_ok(op.get("name"), "name"), name_ok(op.get("host"), "host")
+    label = re.sub(r"[-.]", "_", key(name))
+    if not re.match(r"[a-z_]", label):
+        raise Refused("Invalid {what}: {value}", what="name", value=name)
+    if key(host) != key(name):
+        raise Refused("The inventory name must be the machine name ({name}), in any case, with - or _", name=name)
+    desc = str(op.get("description") or "").strip()
+    if not desc or len(desc) > 200 or re.search(r'["\\\r\n]|\$\{|%\{', desc):
+        raise Refused("The description is required, 200 characters at most, without quotes or backslashes")
+    inv_text = (repo / cfg["inventory"]).read_text(encoding="utf-8")
+    groups, direct, ips = read_inventory(inv_text)
+    taken = {key(m["name"]) for m in machines} | {key(h) for h in ips} | {key(f["name"]) for f in firewalls.values()}
+    if key(name) in taken:
+        raise Refused("{name} already exists in Tofu or in the inventory", name=name)
+    texts = {}
+    read = lambda rel: texts.get(rel) or (repo / rel).read_text(encoding="utf-8")
+    all_blocks = [(rel, b) for tf in sorted(tofu_dir.glob("*.tf")) for rel in [tf.relative_to(repo).as_posix()] for b in blocks(read(rel))]
+    labels = {(k, a) if k == "module" else (k, a, b) for _, ((k, a, b), _, _) in all_blocks}
+    ids = {num(val(body, k)) for _, (_, _, body) in all_blocks for k in ("vm_id", "container_id")} - {None}
+    try:
+        vid = int(op.get("vm_id"))
+    except (TypeError, ValueError):
+        raise Refused("Invalid {what}: {value}", what="vm_id", value=str(op.get("vm_id"))[:20])
+    if not GUEST_IDS[0] <= vid <= GUEST_IDS[1]:
+        raise Refused("{what} must be between {lo} and {hi}", what="vm_id", lo=GUEST_IDS[0], hi=GUEST_IDS[1])
+    if vid in ids:
+        raise Refused("The id {id} is already used in Tofu", id=vid)
+    nodes = {key(n): n for n in groups.get(cfg["node_group"], [])}
+    nodes.update({key(m["node"]): m["node"] for m in machines if m["node"]})
+    node = nodes.get(key(str(op.get("node") or "")))
+    if not node:
+        raise Refused("Unknown node: {node}", node=str(op.get("node"))[:64])
+    # the address: same network, prefix length and gateway as the model, used nowhere in the repository
+    body = model["code"]
+    akey = "ip_address" if val(body, "ip_address") else "address"
+    try:
+        net = ipaddress.ip_interface(val(body, akey) or "").network
+    except ValueError:
+        raise Refused("The model has no literal address with a prefix length (DHCP, a variable?): pick another model")
+    ip = ip_or_none(op.get("ip"))
+    if not ip:
+        raise Refused("Invalid {what}: {value}", what="address", value=str(op.get("ip"))[:50])
+    gw = ip_or_none(val(body, "gateway"))
+    if ip not in net or ip in (net.network_address, net.broadcast_address, gw):
+        raise Refused("{ip} is not a free host address of {net}, the model's network", ip=str(ip), net=str(net))
+    where = ip_used(repo, ip)
+    if where:
+        raise Refused("{ip} is already used in the repository ({where})", ip=str(ip), where=where)
+    pat = words(model["address"].split(".")[-1], model["name"])
+    a = "module." + label if model["address"].startswith("module.") else model["address"].split(".")[0] + "." + label
+    if (("module", label) if a.startswith("module.") else ("resource", a.split(".")[0], label)) in labels:
+        raise Refused("{name} already exists in Tofu or in the inventory", name=a)
+    ref = re.compile(rf"(?<![\w.]){re.escape(model['address'])}(?![\w])")
+
+    # the machine block
+    b = re.sub(r'"[^"]+"(?= *\{$)', f'"{label}"', body.split("\n", 1)[0], count=1) + "\n" + body.split("\n", 1)[1]
+    if val(b, "hostname") or val(b, "name"):
+        b = set_lit(b, "hostname" if val(b, "hostname") else "name", name, "name")
+    b = set_lit(set_lit(b, "vm_id", vid), "node_name", node, "node")
+    b = set_lit(b, akey, f"{ip}/{net.prefixlen}", "address")
+    if re.search(r"^\s*description\s*=", b, re.M):
+        b = set_lit(b, "description", desc)
+    b, _ = set_resources(b, {f: op.get(f) for f in FIELDS}, grow_only=False)
+    b = re.sub(r'^(\s*tags\s*=\s*\[)([^\]\n]*)', lambda m: m[1] + re.sub(r'"([^"]*)"', lambda t: f'"{key(name)}"' if pat.fullmatch(t[1]) else t[0], m[2]), b, flags=re.M)
+    b = scrub(ref.sub(a, b), pat)
+    if leftover(b, pat):
+        raise Refused("The model refers to its own resources ({line}): copy it in the file", line=leftover(b, pat)[:120])
+    texts[model["file"]] = append(read(model["file"]), f"# {name}: {desc}\n{b}")
+    targets = [a]
+
+    # its guest firewall: the rules (or options and rules) block(s), with or without the model's own rules
+    fw = firewalls.get(str(model["id"]))
+    if fw:
+        ats = [(fw["file"], fw["line"])] + ([tuple(fw["options"])] if fw["options"] and tuple(fw["options"]) != (fw["file"], fw["line"]) else [])
+        for rel, line in ats:
+            (k, x, y), body = next(((h, bd) for r, (h, l, bd) in all_blocks if r == rel and l == line))
+            old_label = x if k == "module" else y
+            new_label = re.sub(re.escape(model["address"].split(".")[-1]), label, old_label) if model["address"].split(".")[-1] in old_label else f"{label}_{old_label}"
+            if ((k, new_label) if k == "module" else (k, x, new_label)) in labels:
+                raise Refused("{name} already exists in Tofu or in the inventory", name=new_label)
+            f = body.split("\n", 1)
+            f = re.sub(r'"[^"]+"(?= *\{$)', f'"{new_label}"', f[0], count=1) + "\n" + f[1]
+            f = set_lit(f, "container_id" if val(f, "container_id") else "vm_id", vid, "vm_id")
+            if val(f, "node_name"):
+                f = set_lit(f, "node_name", node, "node")
+            f = re.sub(rf"(?<![\d.]){re.escape(model['ip'])}(?!\d)", str(ip), ref.sub(a, f)) if model["ip"] else ref.sub(a, f)
+            if not op.get("rules"):
+                f = fw_strip(f)
+            f = scrub(f, pat)
+            if leftover(f, pat):
+                raise Refused("The model refers to its own resources ({line}): copy it in the file", line=leftover(f, pat)[:120])
+            texts[rel] = append(read(rel), f"# {name}: guest firewall\n{f}")
+            targets.append(f"module.{new_label}" if k == "module" else f"{x}.{new_label}")
+
+    # the inventory: the address in the group where the model has its own, then the other groups
+    raw = op.get("groups")
+    gs = [name_ok(g, "group") for g in raw] if isinstance(raw, list) and len(raw) <= 50 else []
+    if not gs:
+        raise Refused("Pick at least one inventory group")
+    for g in gs:
+        if g not in groups or g in (cfg["node_group"], cfg["bare_metal_group"]):
+            raise Refused("Group {group} not found in the inventory, or not written as a block", group=g)
+    home = host_group(inv_text, next((h for h in ips if key(h) == key(model["name"])), None))
+    for g in sorted(gs, key=lambda g: g != home):
+        inv_text = group_add(inv_text, g, host, str(ip))
+    texts[cfg["inventory"]] = inv_text
+    if op.get("playbook") or op.get("role"):
+        rel, old, new = playbook_edit(cfg, repo, op.get("playbook"), op.get("role"), host)
+        texts[rel] = new
+
+    # parsed again: the new machine once in Tofu, its firewall once, the host once in the inventory with its address
+    with tempfile.TemporaryDirectory() as tmp:
+        t = pathlib.Path(tmp) / "tofu"
+        t.mkdir()
+        for tf in tofu_dir.glob("*.tf"):
+            (t / tf.name).write_text(read(tf.relative_to(repo).as_posix()), encoding="utf-8")
+        ms, fws = read_tofu(t, pathlib.Path(tmp))
+    mine = [m for m in ms if key(m["name"]) == key(name) or m["id"] == vid]
+    want = {f: str(op.get(f) or "").strip() or model[f] for f in FIELDS}
+    _, d2, ips2 = read_inventory(inv_text)
+    ok = len(ms) == len(machines) + 1 and len(mine) == 1 and (mine[0]["id"], mine[0]["node"], mine[0]["ip"]) == (vid, node, str(ip)) \
+        and all(num(mine[0][f]) == num(want[f]) for f in FIELDS) and len(fws) == len(firewalls) + bool(fw) \
+        and (not fw or len(fws[str(vid)]["rules"]) == (len(fw["rules"]) if op.get("rules") else 0)) \
+        and ips2.get(host) == str(ip) and all(host in d2[g] for g in gs) and sum(key(h) == key(host) for h in ips2) == 1
+    if not ok:
+        raise Refused("The edit did not give the expected file: edit it in the file")
+    kind = "LXC" if model["kind"] == "LXC" else "VM"
+    files = [(rel, (repo / rel).read_text(encoding="utf-8"), new) for rel, new in texts.items()]
+    return {"files": files, "message": f"{name}: new {kind} {vid} on {node}, {ip} (model {model['name']})", "targets": targets}
+
+
+def host_group(text, host):
+    """The group where an inventory host's own `ansible_host` is written, None if none."""
+    if not host:
+        return None
+    inv = yaml.safe_load(text) or {}
+
+    def walk(gs):
+        for g, d in (gs or {}).items():
+            if isinstance(((d or {}).get("hosts") or {}).get(host), dict) and "ansible_host" in d["hosts"][host]:
+                return g
+            r = walk((d or {}).get("children"))
+            if r:
+                return r
+    return walk((inv.get("all") or inv).get("children"))
+
+
 def apply(op, cfg, repo):
-    """(repo-relative file, old text, new text, commit message) for one requested edit."""
+    """{files: [(repo-relative file, old text, new text)], message, targets (new Tofu addresses)} for one edit."""
     o = op.get("op")
+    if o == "new_machine":
+        return new_machine(op, cfg, repo)
+    one = lambda rel, old, new, msg: {"files": [(rel, old, new)], "message": msg, "targets": []}
     if o in ("resources", "fw_add", "fw_del"):
         tofu = (repo / cfg["tofu_dir"]).resolve()
         rel = str(op.get("file") or "")
@@ -864,24 +1109,17 @@ def apply(op, cfg, repo):
               "fw_add": lambda a, b: a.count(d) == b.count(d) + 1 and len(a) == len(b) + 1}[o]
         if len(before) != len(after) or line not in after or not ok(after[line], before.get(line, [])):
             raise Refused("The edit did not give the expected file: edit it in the file")
-        return rel, old, new, msg
+        return one(rel, old, new, msg)
     if o in ("group_add", "group_del"):
         rel, path = cfg["inventory"], repo / cfg["inventory"]
         old = path.read_text(encoding="utf-8")
         host, group = op.get("host"), op.get("group")
         if o == "group_add":
-            return rel, old, group_add(old, group, host, op.get("ip") or ""), f"inventory: add {host} to {group}"
-        return rel, old, group_del(old, group, host), f"inventory: remove {host} from {group}"
+            return one(rel, old, group_add(old, group, host, op.get("ip") or ""), f"inventory: add {host} to {group}")
+        return one(rel, old, group_del(old, group, host), f"inventory: remove {host} from {group}")
     if o == "role_add":
         pb, role, host = op.get("playbook"), op.get("role"), op.get("host")
-        name_ok(pb, "playbook"), name_ok(role, "role")
-        path = repo / cfg["playbooks"] / f"{pb}.yml"
-        if not path.is_file():
-            raise Refused("Unknown file: {file}", file=f"{pb}.yml")
-        if not (repo / cfg["roles"] / role).is_dir():
-            raise Refused("Unknown role: {role}", role=role)
-        old = path.read_text(encoding="utf-8")
-        return (pathlib.PurePosixPath(cfg["playbooks"]) / f"{pb}.yml").as_posix(), old, role_add(old, host, role), f"{pb}: apply {role} to {host}"
+        return one(*playbook_edit(cfg, repo, pb, role, host), f"{pb}: apply {role} to {host}")
     raise Refused("Unknown edit: {op}", op=str(o)[:20])
 
 
@@ -1102,20 +1340,23 @@ class App:
             repo = self.repo(s)
             if op.get("rev") != self.head(repo):
                 raise Refused("The repository moved since the page was loaded: reload the page")
-            rel, old, new, msg = apply(op, s, repo)
-            if new == old:
+            r = apply(op, s, repo)
+            files = [(rel, old, new) for rel, old, new in r["files"] if new != old]
+            if not files:
                 raise Refused("Nothing changes")
-            diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}"))
-            msg = s["git"]["commit_prefix"] + msg
+            rels = [rel for rel, _, _ in files]
+            diff = "".join("".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{rel}", f"b/{rel}")) for rel, old, new in files)
+            msg = s["git"]["commit_prefix"] + r["message"]
             if not commit:
-                return {"ok": True, "file": rel, "diff": diff, "message": msg}
+                return {"ok": True, "file": ", ".join(rels), "files": rels, "diff": diff, "message": msg, "targets": r["targets"]}
             text = str(op.get("message") or msg).strip()
             if not text or len(text) > 2000 or "\0" in text:
                 raise Refused("Invalid {what}: {value}", what="message", value=text[:40])
-            (repo / rel).write_bytes(new.encode("utf-8"))
+            for rel, _, new in files:
+                (repo / rel).write_bytes(new.encode("utf-8"))
             g = s["git"]
             try:
-                self.git(repo, "add", "--", rel)
+                self.git(repo, "add", "--", *rels)
                 self.git(repo, "-c", f"user.name={g['name']}", "-c", f"user.email={g['email']}",
                          "commit", "-q", "--author", "{} <{}>".format(*self.author(h, user)), "-m", text)
                 sha = self.git(repo, "rev-parse", "--short", "HEAD")
@@ -1142,9 +1383,9 @@ class App:
                 if g["url"]:
                     self.sync(s, force=True)
                 else:
-                    self.git(repo, "checkout", "-q", "--", rel)
+                    self.git(repo, "checkout", "-q", "--", *rels)
                 raise
-            return {"ok": True, "commit": sha, "pushed": bool(g["url"] and g["push"]), "mode": mode, "ref": ref, "link": link}
+            return {"ok": True, "commit": sha, "pushed": bool(g["url"] and g["push"]), "mode": mode, "ref": ref, "link": link, "targets": r["targets"]}
 
     def put_settings(self, new):
         if self.cfg["read_only"]:
