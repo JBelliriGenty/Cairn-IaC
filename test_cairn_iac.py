@@ -29,21 +29,89 @@ assert "<title>Example lab</title>" in page and "/*DATA*/" not in page
 # ---- drift: each kind once in the example (more.tf, the inventory's db and printer) ----
 found = {(f["kind"], f["severity"], f["machine"], f["file"], f["line"]) for f in data["findings"]}
 assert found == {
-    ("firewall_off", "warn", "backup", "tofu/more.tf", 32), ("firewall_orphan", "warn", "old", "tofu/more.tf", 69),
+    ("firewall_off", "warn", "backup", "tofu/more.tf", 32), ("firewall_orphan", "warn", "old", "tofu/more.tf", 78),
     ("ip_mismatch", "warn", "db", "tofu/main.tf", 32), ("not_in_inventory", "warn", "backup", "tofu/more.tf", 4),
     ("required_roles", "warn", "printer", "ansible/inventory/hosts.yml", 18),
     ("firewall_no_options", "info", "db", "tofu/more.tf", 54), ("no_playbook", "info", "printer", "ansible/inventory/hosts.yml", 18),
-    ("not_in_tofu", "info", "printer", "ansible/inventory/hosts.yml", 18)}, found
+    ("not_in_tofu", "info", "printer", "ansible/inventory/hosts.yml", 18), ("half_open", "info", "db", "tofu/more.tf", 67)}, found
 assert next(f for f in data["findings"] if f["kind"] == "ip_mismatch")["vars"] == {"name": "db", "tofu": "10.0.0.22", "inventory": "10.0.0.32"}
 fw = data["firewalls"]
 assert (fw["201"]["enabled"], fw["201"]["input_policy"], fw["203"]["enabled"], fw["202"]["options"]) == (True, "DROP", False, None)
 mod = ci.fw_state('module "fw_x" {\n  container_id = 9\n  enabled      = false # later\n  rule { enabled = true }\n}')
-assert mod == {"enabled": False, "input_policy": None}, mod
+assert mod == {"enabled": False, "input_policy": None, "output_policy": None}, mod
+# a firewall module with base rules only (no *_rules list) is a firewall, not a machine
+assert ci.is_firewall("module", "firewall_x", 'module "firewall_x" {\n  source = "./modules/guest-firewall"\n  vm_id  = 9\n}')
 cli = lambda *a: subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(HERE / "example/cairn-iac.json"), "--check", *a],
                                 capture_output=True, text=True)
 r = cli("--json")
-assert r.returncode == 1 and len(json.loads(r.stdout)) == 8, r
+assert r.returncode == 1 and len(json.loads(r.stdout)) == 9, r
 assert "db: Tofu gives 10.0.0.22, the inventory 10.0.0.32" in cli().stdout
+
+# ---- flows: each rule resolved to machines; half-open ones flagged ----
+fl = {(f["owner"], f["dir"], f["src"]["k"], f["dst"]["k"], f["dport"]): f for f in data["flows"]}
+assert fl["web", "out", "web", "db", "5432"]["half"] is False and fl["db", "in", "web", "db", "5432"]["line"] == 58
+assert fl["db", "out", "db", "web", "8443"]["half"] is True
+lan = fl["backup", "in", None, "backup", "22"]["src"]
+assert lan == {"k": None, "a": "10.0.0.0/24", "n": ["backup", "db", "printer", "pve1", "pve2", "web"], "wide": True}, lan
+assert fl["web", "in", None, "web", "443"]["src"] == {"k": None, "a": "", "n": [], "wide": True}
+assert next(f for f in data["findings"] if f["kind"] == "half_open")["vars"] == {"src": "db", "dst": "web", "what": "tcp/8443"}
+assert (ci.port_ranges("1514,1515"), ci.port_ranges("137:138"), ci.port_ranges("")) == ([(1514, 1514), (1515, 1515)], [(137, 138)], None)
+assert ci.nets("0.0.0.0/0") is None and [str(n) for n in ci.nets("10.0.0.2,10.0.0.80")] == ["10.0.0.2/32", "10.0.0.80/32"]
+assert ci.same_traffic({"proto": "tcp", "dport": "1514,1515"}, {"proto": "tcp", "dport": "1515"})
+assert not ci.same_traffic({"proto": "udp", "dport": "53"}, {"proto": "tcp", "dport": "53"})
+
+# a firewall module: its own literal rules apply to each machine using it; the reverse half-open (in without out)
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp)
+    (repo / "tofu/modules/fw").mkdir(parents=True)
+    (repo / "tofu/modules/fw/main.tf").write_text("""resource "proxmox_virtual_environment_firewall_rules" "this" {
+  vm_id = var.vm_id
+
+  rule {
+    type   = "out"
+    proto  = "tcp"
+    dport  = "4317"
+    dest   = "10.0.0.9/32"
+  }
+  rule {
+    type   = "in"
+    source = var.admin
+  }
+  rule {
+    type   = "in"
+    source = local.other
+  }
+}
+variable "admin" {
+  description = "admin network"
+  default     = "10.0.0.0/24"
+}
+""")
+    (repo / "tofu/main.tf").write_text("""module "fw_a" {
+  source = "./modules/fw"
+  vm_id  = 1
+  inbound_rules = [
+    { comment = "from b", proto = "tcp", dport = "80", source = "10.0.0.2/32" },
+  ]
+}
+module "fw_b" {
+  source = "./modules/fw"
+  vm_id  = 2
+  admin  = "10.0.0.9/32"
+  inbound_rules = [
+  ]
+}
+""")
+    ms = [{"name": n, "id": None, "ip": ip} for n, ip in (("a", "10.0.0.1"), ("b", "10.0.0.2"), ("obs", "10.0.0.9"))]
+    _, fws = ci.read_tofu(repo / "tofu", repo)
+    # var. from the call, else the variable's default; local. stays unknown, the rule is skipped
+    assert [(r["dir"], r["dport"], r["source"], r["line"]) for r in fws["1"]["common"]] == [("out", "4317", None, 4), ("in", None, "10.0.0.0/24", 10)]
+    assert [r["source"] for r in fws["2"]["common"]] == [None, "10.0.0.9/32"] and fws["1"]["common"][0]["at"][0] == "tofu/modules/fw/main.tf"
+    fl2 = ci.flows(ms, fws, {})
+    assert [(f["src"]["k"], f["dst"]["k"], f["common"]) for f in fl2] == [
+        ("b", "a", False), ("a", "obs", True), (None, "a", True), ("b", "obs", True), ("obs", "b", True)], fl2
+    half = list(ci.half_open(fl2, fws, ms, {}))
+    assert [(f["src"]["k"], f["dst"]["k"], f["dport"]) for f in half] == [("b", "a", "80")], half
 
 # ---- a Tofu state or saved plan is never read (they can hold secrets) ----
 with tempfile.TemporaryDirectory() as tmp:

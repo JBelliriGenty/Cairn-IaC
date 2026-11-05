@@ -80,7 +80,9 @@ def kv(text, k):
 
 
 def is_firewall(kind, a, body):
-    return (kind == "resource" and a == FW_RESOURCE) or (kind == "module" and re.search(r'^  \w+_rules\s*=\s*\[', body, re.M))
+    # A firewall module with no rules of its own (base rules only) is still a firewall, not a machine.
+    return (kind == "resource" and a == FW_RESOURCE) or (kind == "module" and bool(
+        re.search(r'^  \w+_rules\s*=\s*\[', body, re.M) or re.search(r'^  source\s*=\s*"[^"]*firewall[^"]*"', body, re.M)))
 
 
 def fw_rules(body):
@@ -96,10 +98,33 @@ def fw_rules(body):
 
 
 def fw_state(body):
-    """Guest firewall options written at the top of a block: enabled (True/False, None if not literal), input policy."""
+    """Guest firewall options written at the top of a block: enabled (True/False, None if not literal), policies."""
     m = re.search(r'^  enabled\s*=\s*(true|false)\s*(#.*)?$', body, re.M)
-    p = re.search(r'^  input_policy\s*=\s*"(\w+)"', body, re.M)
-    return {"enabled": m.group(1) == "true" if m else None, "input_policy": p.group(1) if p else None}
+    pol = lambda d: (re.search(rf'^  {d}_policy\s*=\s*"(\w+)"', body, re.M) or [None, None])[1]
+    return {"enabled": m.group(1) == "true" if m else None, "input_policy": pol("input"), "output_policy": pol("output")}
+
+
+RULE_KEYS = ("proto", "dport", "source", "dest", "macro", "comment")
+
+
+def module_rules(src_dir, repo, call):
+    """Rules written in a local firewall module itself (applied to every machine using it). A var. value is taken
+    from the module call (a literal top-level argument), else from the variable's literal default; a rule with any
+    other reference (local., each., a var. without literal value) is skipped."""
+    texts = [(tf.relative_to(repo).as_posix(), tf.read_text(encoding="utf-8")) for tf in sorted(src_dir.glob("*.tf"))] if src_dir.is_dir() else []
+    var = {m.group(1): kv(m.group(2), "default") for _, text in texts
+           for m in re.finditer(r'^variable "(\w+)" \{(.*?)^\}', text, re.S | re.M)}
+    var = {k: (re.search(rf'^  {k}\s*=\s*"([^"]*)"', call, re.M) or [None, v])[1] for k, v in var.items()}
+    out = []
+    for rel, text in texts:
+        for (kind, a, _), line, body in blocks(text):
+            if kind == "resource" and a == FW_RESOURCE:
+                for d, s, e in fw_rules(body):
+                    r = re.sub(r'=(\s*)var\.(\w+)\b', lambda m: f'={m[1]}"{var[m[2]]}"' if var.get(m[2]) is not None else m[0], body[s:e])
+                    if not re.search(r'=\s*[a-z_]+\.', r):
+                        out.append({"dir": d, "at": [rel, line, None], "line": line + body[:s].count("\n"),
+                                    **{k: kv(r, k) for k in RULE_KEYS}})
+    return out
 
 
 def read_tofu(tofu_dir, repo):
@@ -116,10 +141,14 @@ def read_tofu(tofu_dir, repo):
                 label = b if kind == "resource" else a
                 fw = firewalls.setdefault(cid, {"name": re.sub(r"^(firewall|fw)_", "", label), "node": val(body, "node_name"),
                                                 "file": rel, "line": line, "rules": [], "module": kind == "module",
-                                                "enabled": None, "input_policy": None, "options": None})
+                                                "enabled": None, "input_policy": None, "output_policy": None, "options": None, "common": []})
                 if kind == "module":  # a firewall module may take its options as arguments
                     fw.update({k: v for k, v in fw_state(body).items() if v is not None}, options=[rel, line])
-                fw["rules"] += [{"dir": d, "at": [rel, line, i], **{k: kv(body[s:e], k) for k in ("proto", "dport", "source", "dest", "comment")}}
+                    src = val(body, "source") or ""
+                    if src.startswith(("./", "../")):
+                        mdir = (tofu_dir / src).resolve()
+                        fw["common"] = module_rules(mdir, repo.resolve(), body) if repo.resolve() in mdir.parents else []
+                fw["rules"] += [{"dir": d, "at": [rel, line, i], "line": line + body[:s].count("\n"), **{k: kv(body[s:e], k) for k in RULE_KEYS}}
                                 for i, (d, s, e) in enumerate(fw_rules(body))]
                 continue
             # Machines: the provider's VM/container resources, or any module given a vm_id.
@@ -235,7 +264,87 @@ def ip_or_none(s):
         return None
 
 
-def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text):
+def nets(addr):
+    """Networks of a rule address ("10.0.0.2", "10.0.0.0/24", "a,b"); None: anywhere. Aliases, ipsets: skipped."""
+    out = []
+    for p in str(addr or "").split(","):
+        try:
+            out.append(ipaddress.ip_network(p.strip(), strict=False))
+        except ValueError:
+            pass
+    return None if not str(addr or "").strip() or any(n.prefixlen == 0 for n in out) else out
+
+
+def port_ranges(s):
+    """dport "22", "1514,1515", "137:138" as [(lo, hi)]; None: any port (or not literal)."""
+    if not s or not re.fullmatch(r"\d+([:-]\d+)?(,\d+([:-]\d+)?)*", s.replace(" ", "")):
+        return None
+    return [tuple(int(x) for x in (p.replace("-", ":").split(":") * 2)[:2]) for p in s.replace(" ", "").split(",")]
+
+
+def same_traffic(a, b):
+    """Could two rules let the same packets through? Unknown protocol or port (a macro) counts as any."""
+    if a.get("proto") and b.get("proto") and a["proto"] != b["proto"]:
+        return False
+    pa, pb = port_ranges(a.get("dport")), port_ranges(b.get("dport"))
+    return pa is None or pb is None or any(x[0] <= y[1] and y[0] <= x[1] for x in pa for y in pb)
+
+
+def flows(machines, firewalls, ips):
+    """One flow per guest firewall rule: src and dst endpoints {k: machine key (one machine), a: address as
+    written ("" = anywhere), n: machine keys it covers, wide: a network, not single addresses}."""
+    where = {}  # address -> machine key, Tofu first
+    for k, ip in [(key(m["name"]), m["ip"]) for m in machines] + [(key(h), ip) for h, ip in ips.items()]:
+        if ip_or_none(ip):
+            where.setdefault(ip_or_none(ip), k)
+    by_id = {str(m["id"]): m for m in machines if m["id"]}
+    out = []
+    for cid, fw in sorted(firewalls.items()):
+        own = key(by_id[cid]["name"]) if cid in by_id else key(fw["name"])
+        me = {"k": own, "a": "", "n": [own], "wide": False}
+        for common, r in [(False, r) for r in fw["rules"]] + [(True, r) for r in fw["common"]]:
+            addr = r["dest"] if r["dir"] == "out" else r["source"]
+            ns = nets(addr)
+            n = sorted({k for ip, k in where.items() for net in ns or [] if ip in net})
+            single = bool(ns) and all(net.num_addresses == 1 for net in ns)
+            peer = {"k": n[0] if single and len(ns) == 1 and n else None, "a": addr if ns is not None else "", "n": n, "wide": not single}
+            out.append({"owner": own, "dir": r["dir"], "src": me if r["dir"] == "out" else peer, "dst": peer if r["dir"] == "out" else me,
+                        **{k: r[k] for k in ("proto", "dport", "macro", "comment")}, "file": r["at"][0], "line": r["line"],
+                        "common": common, "half": False})
+    return out
+
+
+def half_open(fl, firewalls, machines, ips):
+    """Flows allowed on one side only: an outgoing rule on A to B that no incoming rule on B lets in, or the reverse.
+    Only between two single machines, and only where the other side filters that direction."""
+    by_id = {str(m["id"]): m for m in machines if m["id"]}
+    fw_of = {key(by_id[c]["name"]) if c in by_id else key(fw["name"]): fw for c, fw in firewalls.items()}
+    addrs = {}
+    for k, ip in [(key(m["name"]), m["ip"]) for m in machines] + [(key(h), ip) for h, ip in ips.items()]:
+        if ip_or_none(ip):
+            addrs.setdefault(k, set()).add(ip_or_none(ip))
+    for f in fl:
+        a, b = f["src"]["k"], f["dst"]["k"]
+        if not a or not b or a == b:
+            continue
+        other, need = (b, "in") if f["dir"] == "out" else (a, "out")
+        fw = fw_of.get(other)
+        if not fw or fw["enabled"] is False:
+            continue
+        rules = [r for r in fw["rules"] + fw["common"] if r["dir"] == need]
+        # Proxmox defaults: input DROP, output ACCEPT. A module's own default is not read: its outgoing rules hint at DROP.
+        policy = fw["input_policy"] if need == "in" else fw["output_policy"] or ("DROP" if rules else "ACCEPT")
+        if policy == "ACCEPT":
+            continue
+        mine = addrs.get(f["owner"])
+        if mine and not any(same_traffic(r, f) and (nets(r["source" if need == "in" else "dest"]) is None or
+                                           any(ip in n for ip in mine for n in nets(r["source" if need == "in" else "dest"])))
+                   for r in rules):
+            f["half"] = True
+            yield f
+
+
+def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=()):
     """Inconsistencies between Tofu, the firewalls, the inventory and the playbooks. Each finding:
     {kind, severity (warn|info), machine (page key), file, line, msg (English template), vars}."""
     inv_lines = inv_text.splitlines()
@@ -280,13 +389,22 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text):
         elif fw["options"] is None and fw["rules"]:
             add("firewall_no_options", "info", k, fw["file"], fw["line"],
                 "{name}: rules without firewall options; Proxmox keeps a guest firewall off until it is turned on", name=name)
+    for f in half_open(fl, firewalls, machines, ips):
+        what = (f["proto"] or f["macro"] or "all") + (f"/{f['dport']}" if f["dport"] else "")
+        if f["dir"] == "out":
+            add("half_open", "info", f["owner"], f["file"], f["line"], "{src} may send {what} to {dst}, but no rule on {dst} lets it in",
+                src=f["src"]["k"], dst=f["dst"]["k"], what=what)
+        else:
+            add("half_open", "info", f["owner"], f["file"], f["line"], "{dst} lets {what} in from {src}, but no rule on {src} lets it out",
+                src=f["src"]["k"], dst=f["dst"]["k"], what=what)
     return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
 
 
 def collect(cfg, repo):
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
-    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"))
+    fl = flows(machines, firewalls, ips)
+    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"), fl)
     inv_parent = (repo / cfg["inventory"]).parent.parent
     try:
         pb_prefix = (repo / cfg["playbooks"]).relative_to(inv_parent).as_posix() + "/"
@@ -299,14 +417,14 @@ def collect(cfg, repo):
         "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
-        "playbooks": playbooks, "roles": roles, "findings": findings, "server": None,
+        "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "server": None,
     }
 
 
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "server": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "server": None}
 
 
 def favicon():

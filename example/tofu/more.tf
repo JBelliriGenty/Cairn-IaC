@@ -63,6 +63,15 @@ resource "proxmox_virtual_environment_firewall_rules" "db" {
     dport   = "5432"
     source  = "10.0.0.21/32"
   }
+  # Half-open: web's firewall has no rule letting this in.
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    comment = "Webhooks to web"
+    proto   = "tcp"
+    dport   = "8443"
+    dest    = "10.0.0.21"
+  }
 }
 
 # Left behind: the guest 299 was removed, its firewall was not.

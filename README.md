@@ -14,7 +14,8 @@ for **Proxmox** actually builds. For each machine:
   `ansible-playbook … -l <host> --check --diff`.
 
 A Roles view lists every role with the machines that get it, and the
-machine map can highlight the machines of one role. A Drift view lists
+machine map can highlight the machines of one role. A Flows view shows
+who may talk to whom (see Flows). A Drift view lists
 where the repository disagrees with itself (see Drift), also available from
 the command line for CI.
 
@@ -59,7 +60,12 @@ and serve the file with any web server.
     (a list whose name contains `egress` or `outbound` is outgoing); whether
     a guest firewall is on, and its input policy, from
     `proxmox_virtual_environment_firewall_options` resources or from the
-    `enabled` / `input_policy` arguments of a firewall module.
+    `enabled` / `input_policy` / `output_policy` arguments of a firewall
+  module; for a local firewall module (`source = "./…"`), the literal
+  `rule { … }` blocks written in the module itself (common to every
+  machine using it; a `var.` value comes from the module call's literal
+  argument, else from the variable's literal default; a rule with any other
+  computed value is skipped).
 - **Ansible**: the YAML inventory (nested `children` groups included), every
   `*.yml` playbook (`hosts` patterns resolved by group, `roles` and
   `include_role`/`import_role` tasks), and each role's `tasks/*.yml` task
@@ -68,8 +74,20 @@ and serve the file with any web server.
 Machines are matched across Tofu, firewalls and inventory by `vm_id` and by
 name (case-insensitive, `_` = `-`).
 
-Not followed: exclusion patterns (`!host`, `&group`), roles included by
+Not followed: other modules' contents, exclusion patterns (`!host`, `&group`), roles included by
 other roles, `import_playbook`, values computed in HCL (`var.`, `local.`).
+
+## Flows
+
+The Flows view lists one flow per guest firewall rule: an incoming rule on
+B gives source → B, an outgoing rule on A gives A → destination. Each
+address is resolved to the machines it covers (by Tofu IP, then
+`ansible_host`): one machine, a network (with the number of machines in
+it), a list of addresses, or anywhere (no address, or `0.0.0.0/0`). Pick a
+machine to see who can reach it and what it can reach (networks that
+include it come after the machine itself); the rules common to a firewall
+module are hidden unless asked for. Each flow links to the machine and to
+its file and line.
 
 ## Drift
 
@@ -90,7 +108,14 @@ Notes (they can be on purpose):
   bare-metal groups;
 - an inventory host no playbook targets;
 - firewall rules (provider resource) without a firewall options resource:
-  Proxmox keeps a guest firewall off until it is turned on.
+  Proxmox keeps a guest firewall off until it is turned on;
+- a half-open flow, between two single machines: an outgoing rule on A to
+  B that no incoming rule on B lets in, or an incoming rule on B from A
+  that no outgoing rule on A lets out. Only checked where the other side
+  filters that direction (input policy not `ACCEPT`; output policy `DROP`
+  or `REJECT`, or not written and the firewall has outgoing rules), and
+  where A's address is known. A rule given by a macro, without protocol or
+  port, matches any traffic.
 
 ```sh
 python3 cairn-iac.py -c cairn-iac.json --check         # one line per finding, exit 1 on a warning
