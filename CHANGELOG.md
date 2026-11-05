@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-11-05)
 
 - New machine (server): copy a model's Tofu block, its guest firewall (with
   or without its rules) and its inventory groups into a new machine, plus a
