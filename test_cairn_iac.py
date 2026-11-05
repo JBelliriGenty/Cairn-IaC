@@ -53,10 +53,13 @@ assert "node_capacity  pve2 gives its guests 5 vCPU, more than the 4 declared" i
 cap = data["capacity"]
 assert {n: (c["guests"], c["cores"], c["memory"], c["disk"], c["total"]) for n, c in cap.items()} == {
     "pve1": (1, 2, 2048, 16, {"cores": 8, "memory": 16384, "disk": 200}),
-    "pve2": (2, 5, 9216, 164, {"cores": 4, "memory": 10240, "disk": 500})}, cap
+    "pve2": (2, 5, 9216, 164, {"cores": 4, "memory": 10240, "disk": 500})}, cap  # memory declared in GiB
 # a value Tofu does not give literally (a variable, or nothing) is unknown, not counted; a node declared alone shows up
-c = ci.capacity([{"name": "a", "node": "N1", "cores": "var.cores", "memory": "2048 # note", "disk": None}], {"n2": {"cores": 4}})
-assert (c["n1"]["cores"], c["n1"]["unknown"], c["n1"]["memory"], c["n2"]["total"]) ==        (0, {"cores": ["a"], "memory": [], "disk": ["a"]}, 2048, {"cores": 4}), c
+# declared memory is in GiB, kept in Tofu's MiB like the sums
+c = ci.capacity([{"name": "a", "node": "N1", "cores": "var.cores", "memory": "2048 # note", "disk": None}], {"n2": {"cores": 4, "memory": 3}})
+assert (c["n1"]["cores"], c["n1"]["unknown"], c["n1"]["memory"], c["n2"]["total"]) ==        (0, {"cores": ["a"], "memory": [], "disk": ["a"]}, 2048, {"cores": 4, "memory": 3072}), c
+f = ci.drift({**ci.DEFAULTS}, [], {}, {}, {}, {}, "", cap={"n": {**c["n1"], "name": "N", "total": {"memory": 1024}}})
+assert [x["msg"].format(**x["vars"]) for x in f] == ["N gives its guests 2 GiB of memory, more than the 1 declared"], f
 
 # ---- machines merged from Tofu, the firewalls and the inventory ----
 mm = {m["key"]: m for m in data["machines"]}

@@ -28,7 +28,7 @@ DEFAULTS = {
     "generic_playbooks": [], "note": None, "links": {},
     # Roles every inventory machine must get (drift view and --check); empty: not checked.
     "required_roles": [],
-    # What each Proxmox node can give its guests: {node: {cores, memory (MiB), disk (GB)}}; empty: sums only.
+    # What each Proxmox node can give its guests: {node: {cores, memory (GiB), disk (GB)}}; empty: sums only.
     "node_capacity": {},
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
@@ -401,14 +401,15 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
             add("half_open", "info", f["owner"], f["file"], f["line"], "{dst} lets {what} in from {src}, but no rule on {src} lets it out",
                 src=f["src"]["k"], dst=f["dst"]["k"], what=what)
     for n, c in (cap or {}).items():
-        for f, what in CAP:
+        for f, what, scale in CAP:
             if c["total"].get(f) is not None and c[f] > c["total"][f]:
                 add("over_allocated", "warn", n, "", 0, "{node} gives its guests {used} {what}, more than the {total} declared",
-                    node=c["name"], used=c[f], total=c["total"][f], what=what)
+                    node=c["name"], used=f"{c[f] / scale:g}", total=f"{c['total'][f] / scale:g}", what=what)
     return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
 
 
-CAP = (("cores", "vCPU"), ("memory", "MiB of memory"), ("disk", "GB of disk"))
+# (field, unit in messages, declared unit / Tofu unit): Tofu gives memory in MiB, node_capacity declares it in GiB.
+CAP = (("cores", "vCPU", 1), ("memory", "GiB of memory", 1024), ("disk", "GB of disk", 1))
 
 
 def num(v):
@@ -419,14 +420,15 @@ def num(v):
 
 def capacity(machines, declared):
     """Per node (key): sums of the vCPU, memory and disk Tofu gives its guests; unknown: guests whose value is not
-    a literal number; total: the node's capacity from the settings (node_capacity), {} when not declared."""
+    a literal number; total: the node's capacity from the settings (node_capacity, memory in GiB), in Tofu's units
+    (memory in MiB), {} when not declared."""
     out = {}
-    blank = lambda n: {"name": n, "guests": 0, **{f: 0 for f, _ in CAP}, "unknown": {f: [] for f, _ in CAP}, "total": {}}
+    blank = lambda n: {"name": n, "guests": 0, **{f: 0 for f, *_ in CAP}, "unknown": {f: [] for f, *_ in CAP}, "total": {}}
     for m in machines:
         if m["node"]:
             c = out.setdefault(key(m["node"]), blank(m["node"]))
             c["guests"] += 1
-            for f, _ in CAP:
+            for f, *_ in CAP:
                 v = num(m[f])
                 if v is None:
                     c["unknown"][f].append(m["name"])
@@ -434,7 +436,7 @@ def capacity(machines, declared):
                     c[f] += v
     for n, tot in (declared or {}).items():
         c = out.setdefault(key(n), blank(n))
-        c["total"] = {f: num(tot.get(f)) for f, _ in CAP if isinstance(tot, dict) and num(tot.get(f))}
+        c["total"] = {f: num(tot.get(f)) * k for f, _, k in CAP if isinstance(tot, dict) and num(tot.get(f))}
     return dict(sorted(out.items()))
 
 

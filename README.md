@@ -101,7 +101,7 @@ the column says how many guests are unknown, and which ones on hover. Only
 the first `disk_size`/`size` of a block is read (a VM with several disks
 counts its first one).
 
-With `node_capacity` (`{node: {cores, memory, disk}}`, same units, in the
+With `node_capacity` (`{node: {cores, memory, disk}}`, memory in GiB, disk in GB, in the
 config or in Settings), each sum gets a bar against the node's capacity:
 amber past 80 %, red past 100 %, and a node over its capacity is a drift
 warning. vCPU are often overcommitted on purpose: declare the number you
@@ -118,7 +118,7 @@ Prints what the page shows as JSON, for other tools: `title`, `rev`,
 inventory: `key`, `name`, `host`, `node`, `id`, `ip`, `phys`, `tofu`
 (kind, address, cores, memory, disk, file, line), `firewall` (its id in
 `firewalls`), `groups`, `roles`, `playbooks`), `capacity` (per node:
-`guests`, `cores`, `memory`, `disk`, `unknown`, `total`), `firewalls`,
+`guests`, `cores`, `memory`, `disk`, `unknown`, `total`; memory in MiB everywhere there), `firewalls`,
 `roles`, `playbooks`, `groups`, `findings` and `flows`. No HCL block nor any
 other file content. The page's "Download JSON" button gives the same file,
 from the data already in the page.
@@ -177,7 +177,7 @@ Every key is optional; paths are relative to the config file.
 | `bare_metal_group` | inventory group of physical machines outside the cluster (`bare_metal`) |
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
-| `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in MiB, disk in GB (empty: sums only) |
+| `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
 | `links` | `{name, view, edit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}` |

@@ -435,7 +435,7 @@ const FR = {
   "Not a literal number in Tofu (a variable?): {list}": "Pas un nombre littéral dans Tofu (une variable ?) : {list}",
   "Nodes over their capacity": "Nœuds au-delà de leur capacité",
   "{node} gives its guests {used} {what}, more than the {total} declared": "{node} donne à ses invités {used} {what}, plus que les {total} déclarés",
-  "MiB of memory": "Mio de mémoire", "GB of disk": "Go de disque",
+  "GiB of memory": "Gio de mémoire", "GB of disk": "Go de disque",
   "Node capacity": "Capacité des nœuds",
   "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.":
     "Ce que chaque nœud peut donner à ses invités ; vide : la carte ne montre que les sommes. Un nœud au-delà de sa capacité est un avertissement d'écart.",
@@ -860,7 +860,7 @@ function renderSettings() {
     if (type === "mode") return `<label class="wide">${esc(label)}<select id="${id}" data-p="${p}">${[["push", "Pushed onto the branch"], ["agit", "Pull request opened by the push (Forgejo, Gitea: AGit)"], ["branch", "Pushed onto a new branch, pull request opened by hand"]].map(([k, l]) => `<option value="${k}"${(v || "push") === k ? " selected" : ""}>${esc(t(l))}</option>`).join("")}</select></label>`;
     if (type === "cap") {
       const have = Object.fromEntries(Object.entries(v || {}).map(([n, c]) => [key(n), c]));
-      return `<p class="sub wide">${esc(label)}</p>` + colNodes.map(n => [["cores", "vCPU"], ["memory", `${t("Memory")} (${t("MiB")})`], ["disk", `${t("Disk")} (${t("GB")})`]].map(([f, l]) =>
+      return `<p class="sub wide">${esc(label)}</p>` + colNodes.map(n => [["cores", "vCPU"], ["memory", `${t("Memory")} (${t("GiB")})`], ["disk", `${t("Disk")} (${t("GB")})`]].map(([f, l]) =>
         `<label>${esc(n.toUpperCase())} · ${esc(l)}<input type="number" min="1" data-cap="${esc(n)}" data-f="${f}" value="${esc(have[n]?.[f] ?? "")}"></label>`).join("")).join("");
     }
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
