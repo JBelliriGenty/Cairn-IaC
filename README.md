@@ -179,12 +179,14 @@ reach the port. Forms only send JSON to the same origin (no cookie, no
 CORS), and every edit checks that the repository has not moved since the
 page was loaded.
 
-A `Dockerfile` is included (Alpine, runs as `nobody`):
+An image is published for each release (Alpine, amd64 and arm64, runs as
+`nobody`):
 
 ```sh
-docker build -t cairn-iac .
-docker run -d -p 8080:8080 -v $PWD/server.json:/etc/cairn-iac/config.json:ro -v cairn-iac:/var/lib/cairn-iac cairn-iac
+docker run -d -p 8080:8080 -v $PWD/server.json:/etc/cairn-iac/config.json:ro -v cairn-iac:/var/lib/cairn-iac ghcr.io/jbellirigenty/cairn-iac:1
 ```
+
+Or build it from the included `Dockerfile`: `docker build -t cairn-iac .`
 
 ## Translations
 
