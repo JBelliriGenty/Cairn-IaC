@@ -152,6 +152,19 @@ select { padding: 6px 10px; border: 1px solid var(--control); border-radius: 6px
 .m[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
 .nodes.filtering .m:not(.match) { opacity: .35; }
 .nodes.filtering .m.match { border-color: var(--accent); }
+@media (max-width: 820px) { .nodes.filtering .m:not(.match) { display: none; } }
+.search { flex: 1 1 260px; }
+.search input { flex: 1; width: auto; }
+.cap { display: flex; flex-direction: column; gap: 4px; padding: 0 2px 4px; }
+.cap .row { justify-content: space-between; gap: 2px 8px; }
+.cap .label { font-variant-numeric: tabular-nums; }
+.bar { height: 8px; border-radius: 99px; background: var(--panel); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--tofu); border-radius: inherit; }
+.bar.thin { height: 4px; }
+.meter.warn .bar i { background: var(--warn); }
+.meter.bad .bar i { background: var(--bad); }
+.meter.bad .label b { color: var(--bad); }
+.meter.warn .label b { color: var(--warn); }
 
 .detail { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 18px; min-width: 0; max-height: calc(100vh - 48px); overflow: auto; }
 @media (max-width: 1100px) { .detail { position: static; max-height: none; } }
@@ -249,6 +262,7 @@ pre.diff { max-height: 50vh; }
         <span class="legend-item"><i class="sw t"></i>Tofu</span>
         <span class="legend-item"><i class="sw a"></i>Ansible</span>
       </div>
+      <button class="ghost" id="dl" data-i18n>Download JSON</button>
       <button class="ghost" id="theme"></button>
       <button class="ghost" id="lang"></button>
     </div>
@@ -271,6 +285,8 @@ pre.diff { max-height: 50vh; }
 
     <section class="view" data-view="machines" hidden>
       <div class="toolbar">
+        <label class="row search" for="search"><span class="label" data-i18n>Search</span>
+          <input id="search" type="search" autocomplete="off" spellcheck="false"></label>
         <label class="row" for="rolefilter"><span class="label" data-i18n>Highlight the role</span>
           <select id="rolefilter"><option value="" data-i18n>None</option></select></label>
         <span class="label" data-i18n>Thick left edge: physical machine</span>
@@ -413,6 +429,17 @@ const FR = {
   "Half-open flows": "Flux à moitié ouverts",
   "{src} may send {what} to {dst}, but no rule on {dst} lets it in": "{src} peut envoyer {what} à {dst}, mais aucune règle de {dst} ne le laisse entrer",
   "{dst} lets {what} in from {src}, but no rule on {src} lets it out": "{dst} laisse entrer {what} depuis {src}, mais aucune règle de {src} ne le laisse sortir",
+  // capacity, search, export
+  "Search": "Rechercher", "Name, IP, id, role, group, node": "Nom, IP, id, rôle, groupe, nœud", "Download JSON": "Télécharger le JSON",
+  "{n} unknown": "{n} inconnue", "{n} unknown#pl": "{n} inconnues",
+  "Not a literal number in Tofu (a variable?): {list}": "Pas un nombre littéral dans Tofu (une variable ?) : {list}",
+  "Nodes over their capacity": "Nœuds au-delà de leur capacité",
+  "{node} gives its guests {used} {what}, more than the {total} declared": "{node} donne à ses invités {used} {what}, plus que les {total} déclarés",
+  "MiB of memory": "Mio de mémoire", "GB of disk": "Go de disque",
+  "Node capacity": "Capacité des nœuds",
+  "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.":
+    "Ce que chaque nœud peut donner à ses invités ; vide : la carte ne montre que les sommes. Un nœud au-delà de sa capacité est un avertissement d'écart.",
+  "node": "nœud", "node_capacity": "capacité des nœuds",
   "Roles every inventory machine must get (comma-separated)": "Rôles que toute machine de l'inventaire doit recevoir (séparés par des virgules)",
   // server mode: forms, settings, refusals sent by the server
   "Commit {sha} sent as a pull request ({ref}). Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} envoyé en demande de fusion ({ref}). Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
@@ -564,31 +591,15 @@ const code = s => `<code>${esc(s)}</code>`;
 const key = s => String(s).toLowerCase().replace(/_/g, "-");
 
 // ---------- model: one entry per machine, merged from Tofu, firewalls and the inventory ----------
-const M = {};
+// (the export's machines, plus the full Tofu block and firewall for the detail)
+const M = {}, tofuAt = Object.fromEntries(D.tofu.map(x => [x.address, x]));
 const nodeKeys = D.nodes.map(key), bareKeys = D.bare.map(key);
-for (const m of D.tofu) { const k = key(m.name); M[k] = {key: k, name: m.name.toUpperCase(), tofu: m, id: m.id, node: m.node && key(m.node), ip: m.ip || D.ips[k] || ""}; }
-const byId = Object.fromEntries(Object.values(M).filter(m => m.id != null).map(m => [String(m.id), m]));
-for (const [id, fw] of Object.entries(D.firewalls)) {
-  const m = byId[id] || M[key(fw.name)] || (M[key(fw.name)] = {key: key(fw.name), name: fw.name.toUpperCase(), id: +id, node: fw.node && key(fw.node), ip: ""});
-  m.fw = fw; m.id ??= +id; m.node ??= fw.node && key(fw.node);
-}
-for (const [h, ip] of Object.entries(D.ips)) { const k = key(h); (M[k] ||= {key: k, name: h.toUpperCase(), ip}).ip ||= ip; M[k].host = h; }
-const hostRoles = {}, hostPbs = {}, hostGroups = {};
-for (const [pb, plays] of Object.entries(D.playbooks)) for (const p of plays) for (const h of p.hosts) {
-  (hostPbs[key(h)] ||= new Set()).add(pb);
-  for (const r of p.roles) (hostRoles[key(h)] ||= new Set()).add(r);
-}
-for (const [g, hs] of Object.entries(D.groups)) for (const h of hs) (hostGroups[key(h)] ||= []).push(g);
-for (const m of Object.values(M)) {
-  m.phys = nodeKeys.includes(m.key) || bareKeys.includes(m.key);
-  m.roles = [...(hostRoles[m.key] || [])].sort();
-  m.pbs = [...(hostPbs[m.key] || [])].sort();
-}
+for (const x of D.machines) M[x.key] = {...x, name: x.name.toUpperCase(), tofu: x.tofu && tofuAt[x.tofu.address], fw: x.firewall != null ? D.firewalls[x.firewall] : null, pbs: x.playbooks};
 const roleUse = {};
 for (const m of Object.values(M)) for (const r of m.roles) (roleUse[r] ||= []).push(m.key);
 const FL = D.flows || [];
 const mname = k => M[k] ? M[k].name : String(k).toUpperCase();
-const names = v => ({...v, ...(v.src && {src: mname(v.src)}), ...(v.dst && {dst: mname(v.dst)})});
+const names = v => ({...v, ...(v.src && {src: mname(v.src)}), ...(v.dst && {dst: mname(v.dst)}), ...(v.what && {what: t(v.what)})});
 const touches = (f, k) => [f.src, f.dst].some(e => e.k === k || e.n.includes(k));
 
 // ---------- frame ----------
@@ -607,13 +618,24 @@ if (D.note && D.note.text) $("#note").innerHTML = `<h2>${esc(D.note.title || "")
 
 // ---------- machines map ----------
 const tile = m => `<button class="m${m.phys ? " phys" : ""}" data-k="${m.key}" aria-pressed="false"><b>${esc(m.name)}</b><span class="label">${esc(m.ip || (m.id != null ? "id " + m.id : ""))}</span><span class="marks">${m.tofu || m.fw ? '<i class="sw t" title="Tofu"></i>' : ""}${m.roles.length ? '<i class="sw a" title="Ansible"></i>' : ""}</span></button>`;
+const mem = mb => !mb ? "—" : mb >= 1024 ? `${(mb / 1024).toLocaleString(locale)} ${t("GiB")}` : `${mb} ${t("MiB")}`;
+const disk = gb => gb ? `${gb} ${t("GB")}` : "—";
+// capacity of a node: sums of what Tofu gives its guests, against the declared total (Settings) when there is one
+const CAPF = [["cores", "vCPU", n => n], ["memory", "Memory", mem], ["disk", "Disk", disk]];
+const capBlock = n => {
+  const c = (D.capacity || {})[n];
+  return !c ? "" : `<div class="cap">${CAPF.map(([f, label, fmt]) => {
+    const used = c[f], tot = c.total[f], unk = c.unknown[f], pct = tot ? used / tot * 100 : 0;
+    return `<div class="meter${pct > 100 ? " bad" : pct > 80 ? " warn" : ""}"><div class="row"><span class="label">${t(label)}</span><span class="label"><b>${esc(fmt(used))}</b>${tot ? " / " + esc(fmt(tot)) : ""}${unk.length ? ` <span title="${esc(t("Not a literal number in Tofu (a variable?): {list}", {list: unk.join(", ")}))}">+ ${esc(tp(unk.length, "{n} unknown", "{n} unknown"))}</span>` : ""}</span></div>${tot ? `<div class="bar thin"><i style="width:${Math.min(pct, 100).toFixed(1)}%"></i></div>` : ""}</div>`;
+  }).join("")}</div>`;
+};
 const colNodes = [...new Set([...nodeKeys, ...Object.values(M).map(m => m.node).filter(Boolean)])];
 const placed = new Set();
 let cols = colNodes.map(n => {
   const guests = Object.values(M).filter(m => m.node === n && !m.phys).sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
   const list = [M[n], ...guests].filter(Boolean);
   list.forEach(m => placed.add(m.key));
-  return `<div class="card node"><div class="node-h"><b>${esc(n.toUpperCase())}</b><span class="label">${tp(guests.length, "{n} guest", "{n} guests")}</span></div>${list.map(tile).join("")}</div>`;
+  return `<div class="card node"><div class="node-h"><b>${esc(n.toUpperCase())}</b><span class="label">${tp(guests.length, "{n} guest", "{n} guests")}</span></div>${capBlock(n)}${list.map(tile).join("")}</div>`;
 });
 const bare = bareKeys.map(k => M[k]).filter(m => m && !placed.has(m.key));
 bare.forEach(m => placed.add(m.key));
@@ -623,10 +645,32 @@ if (rest.length) cols.push(`<div class="card node"><div class="node-h"><b>${t("O
 $("#nodes").innerHTML = cols.join("");
 
 $("#rolefilter").innerHTML += Object.keys(D.roles).sort().map(r => `<option value="${esc(r)}">${esc(r)} (${(roleUse[r] || []).length})</option>`).join("");
-$("#rolefilter").addEventListener("change", e => {
-  const users = new Set(roleUse[e.target.value] || []);
-  $("#nodes").classList.toggle("filtering", !!e.target.value);
-  document.querySelectorAll(".m").forEach(b => b.classList.toggle("match", users.has(b.dataset.k)));
+// search: every word in the machine's name, IP, id, node, roles or groups; with the role highlight, both must match
+const hay = m => [m.key, m.ip, m.id, m.node, m.host, ...m.roles, ...m.groups].filter(x => x != null).join(" ").toLowerCase();
+function filterMap() {
+  const words = $("#search").value.toLowerCase().split(/\s+/).filter(Boolean), r = $("#rolefilter").value;
+  $("#nodes").classList.toggle("filtering", !!(words.length || r));
+  document.querySelectorAll(".m").forEach(b => { const m = M[b.dataset.k], h = hay(m);
+    b.classList.toggle("match", (!r || m.roles.includes(r)) && words.every(w => h.includes(w))); });
+}
+$("#search").placeholder = t("Name, IP, id, role, group, node");
+$("#rolefilter").addEventListener("change", filterMap);
+$("#search").addEventListener("input", filterMap);
+filterMap();  // a value the browser restored
+addEventListener("keydown", e => {
+  if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, textarea, select, [contenteditable]") || $("#review").open) return;
+  e.preventDefault();
+  if ($('.view[data-view="machines"]').hidden) { location.hash = "machines"; show("machines"); }
+  $("#search").focus();
+});
+
+// ---------- export: the same JSON as cairn-iac.py --json, from the data already in the page ----------
+const EXPORT = ["title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows"];
+$("#dl").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(Object.fromEntries(EXPORT.map(k => [k, D[k]])), null, 2) + "\n"], {type: "application/json"}));
+  a.download = "cairn-iac.json"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
 function hcl(src) {
@@ -636,8 +680,6 @@ function hcl(src) {
     return esc(c).replace(/^(\s*)([a-z_]+)(\s*=)/, '$1<span class="c-key">$2</span>$3').replace(/&quot;[^&]*?&quot;/g, s => `<span class="c-str">${s}</span>`) + (com ? `<span class="c-com">${esc(com)}</span>` : "");
   }).join("\n");
 }
-const mem = mb => !mb ? "—" : mb >= 1024 ? `${(mb / 1024).toLocaleString(locale)} ${t("GiB")}` : `${mb} ${t("MiB")}`;
-const disk = gb => gb ? `${gb} ${t("GB")}` : "—";
 const pickPb = m => m.pbs.find(p => key(p) === m.key) || m.pbs.find(p => !D.generic_playbooks.includes(p)) || m.pbs[0];
 // Links to the Git web UI: links.view / links.edit are URL templates with {file} and {line}.
 const L = D.links || {}, P = D.paths;
@@ -707,7 +749,7 @@ function renderDetail(m) {
       <button class="primary">${t("Preview")}</button></form></details>`;
   h += `</section><section class="layer"><div class="row"><h3>${t("The content")}</h3><span class="pill a">ansible</span></div>`;
   const host = m.host || m.key, direct = Object.keys(D.direct || {}).filter(g => D.direct[g].includes(host));
-  const groupPills = () => `<div class="pills">${(hostGroups[m.key] || []).map(g => EDIT && direct.includes(g)
+  const groupPills = () => `<div class="pills">${m.groups.map(g => EDIT && direct.includes(g)
     ? `<button class="pill x" data-ungroup="${esc(g)}" title="${esc(t("Remove from {group}", {group: g}))}">${esc(g)} ×</button>`
     : `<span class="pill" title="${t("Inventory group")}">${esc(g)}</span>`).join("")}</div>`;
   if (m.roles.length) {
@@ -798,6 +840,7 @@ const FORM = [
   ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Group of the physical machines outside the cluster"],
     ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
   ["Drift", [["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
+  ["Node capacity", [["node_capacity", "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.", "cap"]]],
   ["Path of a change", [["workflow.example", "Machine shown first"], ["workflow.workstation", "Workstation"], ["workflow.tofu", "Tofu command"],
     ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
     ["workflow.controller_path", "Repository path on the controller"], ["workflow.ansible", "Ansible command"]]],
@@ -815,6 +858,11 @@ function renderSettings() {
     if (type === "bool") return `<label class="check wide"><input type="checkbox" id="${id}" data-p="${p}" data-t="bool"${v ? " checked" : ""}> ${esc(label)}</label>`;
     if (type === "text") return `<label class="wide">${esc(label)}<textarea id="${id}" data-p="${p}">${esc(v)}</textarea></label>`;
     if (type === "mode") return `<label class="wide">${esc(label)}<select id="${id}" data-p="${p}">${[["push", "Pushed onto the branch"], ["agit", "Pull request opened by the push (Forgejo, Gitea: AGit)"], ["branch", "Pushed onto a new branch, pull request opened by hand"]].map(([k, l]) => `<option value="${k}"${(v || "push") === k ? " selected" : ""}>${esc(t(l))}</option>`).join("")}</select></label>`;
+    if (type === "cap") {
+      const have = Object.fromEntries(Object.entries(v || {}).map(([n, c]) => [key(n), c]));
+      return `<p class="sub wide">${esc(label)}</p>` + colNodes.map(n => [["cores", "vCPU"], ["memory", `${t("Memory")} (${t("MiB")})`], ["disk", `${t("Disk")} (${t("GB")})`]].map(([f, l]) =>
+        `<label>${esc(n.toUpperCase())} · ${esc(l)}<input type="number" min="1" data-cap="${esc(n)}" data-f="${f}" value="${esc(have[n]?.[f] ?? "")}"></label>`).join("")).join("");
+    }
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
     return `<label${/url|text|generic|required/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
   };
@@ -831,6 +879,8 @@ function saveSettings() {
     const [a, b] = e.dataset.p.split("."), v = e.dataset.t === "bool" ? e.checked : e.dataset.t === "list" ? e.value.split(",").map(x => x.trim()).filter(Boolean) : e.value.trim();
     if (b) (st[a] ||= {})[b] = v; else st[a] = v;
   });
+  st.node_capacity = {};
+  document.querySelectorAll("#settings [data-cap]").forEach(e => { if (e.value.trim()) (st.node_capacity[e.dataset.cap] ||= {})[e.dataset.f] = Math.round(+e.value); });
   if (st.note && !st.note.text) st.note = null;
   api("/api/settings", st).then(r => { $("#s-out").className = "okmsg"; $("#s-out").textContent = r.sync_error ? t("Saved; Git: {err}", {err: r.sync_error}) : t("Saved."); setTimeout(() => { location.hash = "settings"; location.reload(); }, 900); },
     e => { $("#s-out").className = "err"; $("#s-out").textContent = errText(e); });
@@ -862,7 +912,7 @@ $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><
 // ---------- drift: findings of cairn-iac.py, grouped by kind, warnings first ----------
 const KINDS = {not_in_inventory: "Created by Tofu, not in the inventory", ip_mismatch: "Addresses that differ", firewall_off: "Firewalls turned off",
   firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", not_in_tofu: "In the inventory, not created by Tofu",
-  no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows"};
+  no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows", over_allocated: "Nodes over their capacity"};
 $("#drift-lead").innerHTML = esc(t("Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.", {cmd: "\u0000"})).replace("\u0000", code("cairn-iac.py --check"));
 const byKind = {};
 for (const f of F) (byKind[f.kind] ||= []).push(f);

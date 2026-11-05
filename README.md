@@ -13,11 +13,14 @@ for **Proxmox** actually builds. For each machine:
   `apply` commands, then `git push`, `git pull` on the controller and
   `ansible-playbook … -l <host> --check --diff`.
 
-A Roles view lists every role with the machines that get it, and the
-machine map can highlight the machines of one role. A Flows view shows
+A Roles view lists every role with the machines that get it. The machine
+map shows each node's capacity (see Node capacity), can highlight the
+machines of one role, and has a search field (`/` focuses it) matching
+names, IPs, ids, roles, groups and nodes. A Flows view shows
 who may talk to whom (see Flows). A Drift view lists
 where the repository disagrees with itself (see Drift), also available from
-the command line for CI.
+the command line for CI. The whole model can be exported as JSON (see
+JSON export).
 
 It reads files only: it never runs `tofu` or `ansible`, needs no state file
 and no credentials. It never reads a Tofu state (`*.tfstate`,
@@ -89,6 +92,37 @@ include it come after the machine itself); the rules common to a firewall
 module are hidden unless asked for. Each flow links to the machine and to
 its file and line.
 
+## Node capacity
+
+Each node's column on the machine map sums the vCPU, memory (MiB) and
+disk (GB) that Tofu gives the guests on that node. A value Tofu does not
+write as a literal number (a variable, a `local.`, nothing) is not counted:
+the column says how many guests are unknown, and which ones on hover. Only
+the first `disk_size`/`size` of a block is read (a VM with several disks
+counts its first one).
+
+With `node_capacity` (`{node: {cores, memory, disk}}`, same units, in the
+config or in Settings), each sum gets a bar against the node's capacity:
+amber past 80 %, red past 100 %, and a node over its capacity is a drift
+warning. vCPU are often overcommitted on purpose: declare the number you
+accept, not the physical cores.
+
+## JSON export
+
+```sh
+python3 cairn-iac.py -c cairn-iac.json --json > model.json
+```
+
+Prints what the page shows as JSON, for other tools: `title`, `rev`,
+`machines` (one per machine, merged from Tofu, the firewalls and the
+inventory: `key`, `name`, `host`, `node`, `id`, `ip`, `phys`, `tofu`
+(kind, address, cores, memory, disk, file, line), `firewall` (its id in
+`firewalls`), `groups`, `roles`, `playbooks`), `capacity` (per node:
+`guests`, `cores`, `memory`, `disk`, `unknown`, `total`), `firewalls`,
+`roles`, `playbooks`, `groups`, `findings` and `flows`. No HCL block nor any
+other file content. The page's "Download JSON" button gives the same file,
+from the data already in the page.
+
 ## Drift
 
 The Drift view (with a count in the menu and on the overview) and
@@ -100,7 +134,8 @@ The Drift view (with a count in the menu and on the overview) and
   Tofu machine nor, by name, an inventory host);
 - a guest firewall turned off (`enabled = false`) that has rules: they
   protect nothing;
-- an inventory host missing one of the `required_roles`.
+- an inventory host missing one of the `required_roles`;
+- a node given more vCPU, memory or disk than its `node_capacity`.
 
 Notes (they can be on purpose):
 
@@ -123,7 +158,8 @@ python3 cairn-iac.py -c cairn-iac.json --check --json  # the same, as JSON
 ```
 
 Each JSON finding: `kind`, `severity` (`warn` or `info`), `machine`,
-`file`, `line`, `msg` (an English template) and its `vars`.
+`file`, `line`, `msg` (an English template) and its `vars`. A capacity
+finding has no file (`""`, line 0): its `machine` is the node.
 
 ## Configuration (JSON)
 
@@ -141,6 +177,7 @@ Every key is optional; paths are relative to the config file.
 | `bare_metal_group` | inventory group of physical machines outside the cluster (`bare_metal`) |
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
+| `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in MiB, disk in GB (empty: sums only) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
 | `links` | `{name, view, edit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}` |

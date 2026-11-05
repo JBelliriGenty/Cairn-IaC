@@ -7,6 +7,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
     python3 cairn-iac.py -c cairn-iac.json -o iac.html      # static page
     python3 cairn-iac.py -c server.json --serve             # page + edits, Git commit and push
     python3 cairn-iac.py -c cairn-iac.json --check [--json] # drift list, exit 1 on a warning (CI)
+    python3 cairn-iac.py -c cairn-iac.json --json           # the whole model as JSON, for other tools
 
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
@@ -27,6 +28,8 @@ DEFAULTS = {
     "generic_playbooks": [], "note": None, "links": {},
     # Roles every inventory machine must get (drift view and --check); empty: not checked.
     "required_roles": [],
+    # What each Proxmox node can give its guests: {node: {cores, memory (MiB), disk (GB)}}; empty: sums only.
+    "node_capacity": {},
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
@@ -344,7 +347,7 @@ def half_open(fl, firewalls, machines, ips):
             yield f
 
 
-def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=()):
+def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap=None):
     """Inconsistencies between Tofu, the firewalls, the inventory and the playbooks. Each finding:
     {kind, severity (warn|info), machine (page key), file, line, msg (English template), vars}."""
     inv_lines = inv_text.splitlines()
@@ -397,34 +400,110 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=()):
         else:
             add("half_open", "info", f["owner"], f["file"], f["line"], "{dst} lets {what} in from {src}, but no rule on {src} lets it out",
                 src=f["src"]["k"], dst=f["dst"]["k"], what=what)
+    for n, c in (cap or {}).items():
+        for f, what in CAP:
+            if c["total"].get(f) is not None and c[f] > c["total"][f]:
+                add("over_allocated", "warn", n, "", 0, "{node} gives its guests {used} {what}, more than the {total} declared",
+                    node=c["name"], used=c[f], total=c["total"][f], what=what)
     return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
+
+
+CAP = (("cores", "vCPU"), ("memory", "MiB of memory"), ("disk", "GB of disk"))
+
+
+def num(v):
+    """A literal whole number as Tofu writes it ("2048", "2048 # note"), else None (a variable, nothing)."""
+    m = re.fullmatch(r"(\d+)\s*(#.*)?", str(v if v is not None else "").strip())
+    return int(m.group(1)) if m else None
+
+
+def capacity(machines, declared):
+    """Per node (key): sums of the vCPU, memory and disk Tofu gives its guests; unknown: guests whose value is not
+    a literal number; total: the node's capacity from the settings (node_capacity), {} when not declared."""
+    out = {}
+    blank = lambda n: {"name": n, "guests": 0, **{f: 0 for f, _ in CAP}, "unknown": {f: [] for f, _ in CAP}, "total": {}}
+    for m in machines:
+        if m["node"]:
+            c = out.setdefault(key(m["node"]), blank(m["node"]))
+            c["guests"] += 1
+            for f, _ in CAP:
+                v = num(m[f])
+                if v is None:
+                    c["unknown"][f].append(m["name"])
+                else:
+                    c[f] += v
+    for n, tot in (declared or {}).items():
+        c = out.setdefault(key(n), blank(n))
+        c["total"] = {f: num(tot.get(f)) for f, _ in CAP if isinstance(tot, dict) and num(tot.get(f))}
+    return dict(sorted(out.items()))
+
+
+def merge(data):
+    """One entry per machine, merged from Tofu, the firewalls and the inventory, as the page shows them."""
+    hosts = {key(h): ip for h, ip in data["ips"].items()}
+    new = lambda k, name: {"key": k, "name": name, "host": None, "node": None, "id": None, "ip": "", "tofu": None, "firewall": None}
+    M = {}
+    for m in data["tofu"]:
+        k = key(m["name"])
+        M[k] = {**new(k, m["name"]), "node": m["node"] and key(m["node"]), "id": m["id"], "ip": m["ip"] or hosts.get(k) or "",
+                "tofu": {f: m[f] for f in ("kind", "address", "cores", "memory", "disk", "file", "line")}}
+    by_id = {str(x["id"]): x for x in M.values() if x["id"] is not None}
+    for cid, fw in data["firewalls"].items():
+        k = key(fw["name"])
+        x = by_id.get(cid) or M.get(k) or M.setdefault(k, new(k, fw["name"]))
+        x["firewall"] = cid
+        x["id"] = x["id"] if x["id"] is not None else int(cid) if cid.isdigit() else None
+        x["node"] = x["node"] or (fw["node"] and key(fw["node"]))
+    for h, ip in data["ips"].items():
+        x = M.setdefault(key(h), new(key(h), h))
+        x["ip"], x["host"] = x["ip"] or ip, h
+    roles, pbs, groups = {}, {}, {}
+    for pb, plays in data["playbooks"].items():
+        for p in plays:
+            for h in p["hosts"]:
+                pbs.setdefault(key(h), set()).add(pb)
+                roles.setdefault(key(h), set()).update(p["roles"])
+    for g, hs in data["groups"].items():
+        for h in hs:
+            groups.setdefault(key(h), []).append(g)
+    phys = {key(h) for h in data["nodes"] + data["bare"]}
+    for k, x in M.items():
+        x.update(phys=k in phys, groups=groups.get(k, []), roles=sorted(roles.get(k, ())), playbooks=sorted(pbs.get(k, ())))
+    return list(M.values())
+
+
+# What --json prints and the page's "Download JSON" gives: what the page shows, never a file's contents beyond it.
+EXPORT = ("title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows")
 
 
 def collect(cfg, repo):
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
-    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"), fl)
+    cap = capacity(machines, cfg.get("node_capacity"))
+    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"), fl, cap)
     inv_parent = (repo / cfg["inventory"]).parent.parent
     try:
         pb_prefix = (repo / cfg["playbooks"]).relative_to(inv_parent).as_posix() + "/"
     except ValueError:
         pb_prefix = cfg["playbooks"].rstrip("/") + "/"
-    return {
+    data = {
         "title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": git_rev(repo),
         "workflow": cfg["workflow"], "note": cfg["note"], "playbook_prefix": pb_prefix,
         "generic_playbooks": cfg["generic_playbooks"], "links": cfg["links"],
         "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
-        "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "server": None,
+        "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "capacity": cap, "server": None,
     }
+    data["machines"] = merge(data)
+    return data
 
 
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "server": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None}
 
 
 def favicon():
@@ -457,6 +536,13 @@ def build(cfg_path, out_path):
           f"{len(data['findings'])} drift findings)")
 
 
+def dump(cfg_path):
+    """The collected model as JSON (machines merged, capacity, firewalls, roles, findings, flows)."""
+    cfg = load_config(cfg_path)
+    data = collect(cfg, (cfg["base"] / cfg["repo"]).resolve())
+    print(json.dumps({k: data[k] for k in EXPORT}, ensure_ascii=False, indent=2))
+
+
 def check(cfg_path, as_json):
     """Drift findings on stdout; exit status 1 if one is a warning (for CI)."""
     cfg = load_config(cfg_path)
@@ -465,7 +551,8 @@ def check(cfg_path, as_json):
         print(json.dumps(findings, ensure_ascii=False, indent=2))
     else:
         for f in findings:
-            print(f"{f['severity']:<5} {f['kind']:<19} {f['file']}:{f['line']}  {f['msg'].format(**f['vars'])}")
+            where = f"{f['file']}:{f['line']}" if f["file"] else "node_capacity"
+            print(f"{f['severity']:<5} {f['kind']:<19} {where}  {f['msg'].format(**f['vars'])}")
         n = sum(f["severity"] == "warn" for f in findings)
         print(f"cairn-iac: {n} warnings, {len(findings) - n} notes", file=sys.stderr)
     return 1 if any(f["severity"] == "warn" for f in findings) else 0
@@ -916,6 +1003,11 @@ class App:
                 v = [name_ok(x, "playbook") for x in (v or [])]
             elif k == "required_roles":
                 v = [name_ok(x, "role") for x in (v or [])]
+            elif k == "node_capacity":
+                ok = lambda x: isinstance(x, int) and not isinstance(x, bool) and 0 < x < 1 << 40
+                if not isinstance(v, dict) or not all(isinstance(c, dict) and all(f in FIELDS and ok(x) for f, x in c.items()) for c in v.values()):
+                    raise Refused("Invalid {what}: {value}", what=k, value=json.dumps(v)[:60])
+                v = {name_ok(n, "node"): c for n, c in v.items() if c}
             elif k in ("git", "firewall_lists", "workflow", "links", "note"):
                 if v is not None and not isinstance(v, dict):
                     raise Refused("Invalid {what}: {value}", what=k, value=type(v).__name__)
@@ -1031,9 +1123,11 @@ if __name__ == "__main__":
     ap.add_argument("-o", "--output", type=pathlib.Path, default=pathlib.Path("iac.html"))
     ap.add_argument("--serve", action="store_true", help="serve the page with editing (see README, Server)")
     ap.add_argument("--check", action="store_true", help="print the drift findings, exit 1 if one is a warning (CI)")
-    ap.add_argument("--json", action="store_true", help="with --check: as JSON")
+    ap.add_argument("--json", action="store_true", help="with --check: the findings as JSON; alone: the whole model as JSON")
     a = ap.parse_args()
     cfg_path = a.config.resolve() if a.config else None
     if a.check:
         sys.exit(check(cfg_path, a.json))
+    if a.json:
+        sys.exit(dump(cfg_path))
     serve(load_config(cfg_path)) if a.serve else build(cfg_path, a.output)

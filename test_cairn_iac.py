@@ -33,7 +33,8 @@ assert found == {
     ("ip_mismatch", "warn", "db", "tofu/main.tf", 32), ("not_in_inventory", "warn", "backup", "tofu/more.tf", 4),
     ("required_roles", "warn", "printer", "ansible/inventory/hosts.yml", 18),
     ("firewall_no_options", "info", "db", "tofu/more.tf", 54), ("no_playbook", "info", "printer", "ansible/inventory/hosts.yml", 18),
-    ("not_in_tofu", "info", "printer", "ansible/inventory/hosts.yml", 18), ("half_open", "info", "db", "tofu/more.tf", 67)}, found
+    ("not_in_tofu", "info", "printer", "ansible/inventory/hosts.yml", 18), ("half_open", "info", "db", "tofu/more.tf", 67),
+    ("over_allocated", "warn", "pve2", "", 0)}, found
 assert next(f for f in data["findings"] if f["kind"] == "ip_mismatch")["vars"] == {"name": "db", "tofu": "10.0.0.22", "inventory": "10.0.0.32"}
 fw = data["firewalls"]
 assert (fw["201"]["enabled"], fw["201"]["input_policy"], fw["203"]["enabled"], fw["202"]["options"]) == (True, "DROP", False, None)
@@ -44,8 +45,33 @@ assert ci.is_firewall("module", "firewall_x", 'module "firewall_x" {\n  source =
 cli = lambda *a: subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(HERE / "example/cairn-iac.json"), "--check", *a],
                                 capture_output=True, text=True)
 r = cli("--json")
-assert r.returncode == 1 and len(json.loads(r.stdout)) == 9, r
+assert r.returncode == 1 and len(json.loads(r.stdout)) == 10, r
 assert "db: Tofu gives 10.0.0.22, the inventory 10.0.0.32" in cli().stdout
+assert "node_capacity  pve2 gives its guests 5 vCPU, more than the 4 declared" in cli().stdout
+
+# ---- node capacity: sums of what Tofu gives each node's guests, against the declared totals ----
+cap = data["capacity"]
+assert {n: (c["guests"], c["cores"], c["memory"], c["disk"], c["total"]) for n, c in cap.items()} == {
+    "pve1": (1, 2, 2048, 16, {"cores": 8, "memory": 16384, "disk": 200}),
+    "pve2": (2, 5, 9216, 164, {"cores": 4, "memory": 10240, "disk": 500})}, cap
+# a value Tofu does not give literally (a variable, or nothing) is unknown, not counted; a node declared alone shows up
+c = ci.capacity([{"name": "a", "node": "N1", "cores": "var.cores", "memory": "2048 # note", "disk": None}], {"n2": {"cores": 4}})
+assert (c["n1"]["cores"], c["n1"]["unknown"], c["n1"]["memory"], c["n2"]["total"]) ==        (0, {"cores": ["a"], "memory": [], "disk": ["a"]}, 2048, {"cores": 4}), c
+
+# ---- machines merged from Tofu, the firewalls and the inventory ----
+mm = {m["key"]: m for m in data["machines"]}
+assert mm["web"] == {"key": "web", "name": "web", "host": "web", "node": "pve1", "id": 201, "ip": "10.0.0.21",
+                     "tofu": {"kind": "LXC", "address": "proxmox_virtual_environment_container.web", "cores": "2", "memory": "2048",
+                              "disk": "16", "file": "tofu/main.tf", "line": 2},
+                     "firewall": "201", "phys": False, "groups": ["guests"], "roles": ["base", "web"], "playbooks": ["site"]}, mm["web"]
+assert (mm["old"]["id"], mm["old"]["tofu"], mm["old"]["host"]) == (299, None, None) and mm["pve1"]["phys"]
+
+# ---- --json alone: the model, the same as the page's "Download JSON" ----
+r = subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(HERE / "example/cairn-iac.json"), "--json"], capture_output=True, text=True)
+model = json.loads(r.stdout)
+assert r.returncode == 0 and list(model) == list(ci.EXPORT) and model == {k: data[k] for k in ci.EXPORT}, r.stderr
+assert all("code" not in m and "code" not in (m["tofu"] or {}) for m in model["machines"])
+assert 'const EXPORT = ["' + '", "'.join(ci.EXPORT) + '"]' in page  # the page downloads the same keys
 
 # ---- flows: each rule resolved to machines; half-open ones flagged ----
 fl = {(f["owner"], f["dir"], f["src"]["k"], f["dst"]["k"], f["dport"]): f for f in data["flows"]}
@@ -123,6 +149,8 @@ with tempfile.TemporaryDirectory() as tmp:
     out = pathlib.Path(tmp) / "iac.html"
     ci.build(repo / "cairn-iac.json", out)
     assert marker not in out.read_text(encoding="utf-8")
+    r = subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(repo / "cairn-iac.json"), "--json"], capture_output=True, text=True)
+    assert r.returncode == 0 and marker not in r.stdout
 
 # ---- edits, on a copy of the example made a Git repo ----
 def refused(f, *a):
@@ -216,5 +244,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert bgit("rev-parse", "main") == rev and bgit("log", "-1", "--format=%s", out["ref"]) == "web: cores 3 -> 5"
     assert app2.head(data2 / "repo") == rev
     assert "mode" in refused(app2.put_settings, {"git": {**cfg["git"], "mode": "nope"}})
+    assert "node_capacity" in refused(app2.put_settings, {"node_capacity": {"pve1": {"cores": "8"}}})
+    assert "node" in refused(app2.put_settings, {"node_capacity": {"pve 1": {"cores": 8}}})
+    app2.put_settings({"node_capacity": {"pve1": {"cores": 8, "memory": 4096}, "pve2": {}}})
+    assert app2.settings()["node_capacity"] == {"pve1": {"cores": 8, "memory": 4096}}
 assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
 print("ok")
