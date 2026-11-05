@@ -49,6 +49,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #nav { display: flex; flex-direction: column; gap: 2px; }
 #nav button { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 0; border-radius: 8px; background: none;
   cursor: pointer; text-align: left; color: var(--muted); transition: background .15s, color .15s; }
+#nav button[hidden] { display: none; }
 #nav button:hover { background: var(--track); color: var(--fg); }
 #nav button[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); color: var(--accent); font-weight: 600; }
 #nav svg { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }

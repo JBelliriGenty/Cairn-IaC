@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 (2026-11-06)
+
+- Static page: the server-only "New machine" and "Settings" entries are
+  hidden again (they showed and led back to the overview).
+
 ## 1.1.0 (2026-11-05)
 
 - New machine (server): copy a model's Tofu block, its guest firewall (with

@@ -25,6 +25,7 @@ assert data["roles"]["web"]["templates"] == ["site.conf.j2"]
 assert data["nodes"] == ["pve1", "pve2"] and data["playbook_prefix"] == "playbooks/"
 assert data["direct"]["guests"] == ["db", "web"]
 assert "<title>Example lab</title>" in page and "/*DATA*/" not in page
+assert "#nav button[hidden] { display: none; }" in page  # server-only views stay out of the static page
 
 # ---- drift: each kind once in the example (more.tf, the inventory's db and printer) ----
 found = {(f["kind"], f["severity"], f["machine"], f["file"], f["line"]) for f in data["findings"]}
