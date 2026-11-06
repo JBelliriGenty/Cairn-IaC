@@ -260,6 +260,8 @@ with tempfile.TemporaryDirectory() as tmp:
     bgit = lambda *a: subprocess.run(["git", "-C", str(bare), *a], check=True, capture_output=True, text=True).stdout.strip()
     assert bgit("rev-parse", "main") == rev and bgit("log", "-1", "--format=%s", out["ref"]) == "web: cores 3 -> 5"
     assert app2.head(data2 / "repo") == rev
+    sm = app2.summary()  # dashboards: /api/summary
+    assert sm["rev"] == rev[:7] and sm["machines"] >= 1 and sm["warnings"] + sm["notes"] >= 0 and not sm["error"], sm
     assert "mode" in refused(app2.put_settings, {"git": {**cfg["git"], "mode": "nope"}})
     assert "node_capacity" in refused(app2.put_settings, {"node_capacity": {"pve1": {"cores": "8"}}})
     assert "node" in refused(app2.put_settings, {"node_capacity": {"pve 1": {"cores": 8}}})

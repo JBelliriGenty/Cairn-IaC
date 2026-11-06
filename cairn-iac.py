@@ -12,7 +12,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
 """
-import argparse, base64, difflib, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, tempfile, threading, time, urllib.parse
+import argparse, base64, difflib, hmac, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, tempfile, threading, time, urllib.parse
 
 try:
     import yaml
@@ -50,6 +50,8 @@ SERVER = {
     # Empty: requests from this machine only (loopback), user "local".
     "trusted_proxies": [], "user_header": "Remote-User", "groups_header": "Remote-Groups",
     "name_header": "Remote-Name", "email_header": "Remote-Email", "require_groups": [],
+    # File holding a token (32 characters min.) that opens GET /api/summary to dashboards; empty: closed.
+    "summary_token_file": "",
 }
 VM_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
 FW_RESOURCE = "proxmox_virtual_environment_firewall_rules"
@@ -1218,6 +1220,9 @@ class App:
         self.lock = threading.Lock()  # ponytail: one lock for sync, edits and page builds; fine for a handful of users
         self.synced, self.sync_error, self.cache, self.hist = 0.0, "", (None, None), {}
         self.proxies = [ipaddress.ip_network(p, strict=False) for p in cfg["trusted_proxies"]]
+        self.token = (cfg["base"] / cfg["summary_token_file"]).read_text().strip() if cfg.get("summary_token_file") else ""
+        if self.token and len(self.token) < 32:
+            sys.exit("cairn-iac: summary_token_file: token shorter than 32 characters")
 
     def settings(self):
         s = json.loads(self.settings_file.read_text(encoding="utf-8"))
@@ -1305,6 +1310,19 @@ class App:
             "synced": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.synced)) if self.synced else "",
         }
         return render(data)
+
+    def summary(self):
+        """Read-only figures for dashboards (Homepage): machines, drift warnings and notes, commit, sync state."""
+        with self.lock:
+            s = self.settings()
+            self.sync(s)
+            repo = self.repo(s)
+            rev = self.head(repo)
+            data = self.model(s, repo, rev)[1]
+        warn = sum(f["severity"] == "warn" for f in data["findings"])
+        return {"machines": len(data["machines"]), "firewalls": len(data["firewalls"]), "roles": len(data["roles"]),
+                "warnings": warn, "notes": len(data["findings"]) - warn, "rev": rev[:7],
+                "error": data.get("error", "") or self.sync_error}
 
     def history(self, k):
         """A machine's latest commits (see history()), cached per commit and settings."""
@@ -1463,6 +1481,8 @@ def serve(cfg):
                 return self.send(200, "ok\n", "text/plain")
             if self.path.split("?")[0] == "/favicon.ico":
                 return self.send(200, favicon(), "image/png")
+            if self.path == "/api/summary" and app.token and hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {app.token}"):
+                return self.send(200, app.summary())
             user = app.user(self)
             if not user:
                 return self.send(403, "access denied\n", "text/plain")

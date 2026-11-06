@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 (2026-11-07)
+
+- `GET /api/summary` for dashboards such as Homepage, opened by a bearer
+  token (`summary_token_file`): machines, firewalls, roles, drift warnings
+  and notes, commit, sync error.
+
 ## 1.1.1 (2026-11-06)
 
 - Static page: the server-only "New machine" and "Settings" entries are
