@@ -50,6 +50,25 @@ assert r.returncode == 1 and len(json.loads(r.stdout)) == 10, r
 assert "db: Tofu gives 10.0.0.22, the inventory 10.0.0.32" in cli().stdout
 assert "node_capacity  pve2 gives its guests 5 vCPU, more than the 4 declared" in cli().stdout
 
+# ---- accepted findings and the vCPU ratio ----
+ids = {f["id"] for f in data["findings"]}
+assert {"firewall_orphan:old", "over_allocated:pve2:cores", "not_in_inventory:backup"} <= ids, ids
+assert any(i.startswith("half_open:db:") for i in ids)
+cfg2 = ci.load_config(HERE / "example/cairn-iac.json")
+d2 = ci.collect({**cfg2, "vcpu_ratio": 2, "accepted_findings": {"firewall_orphan:old": "VM made by hand, firewall only"}},
+                (cfg2["base"] / cfg2["repo"]).resolve())
+f2 = {f["id"]: f for f in d2["findings"]}
+assert "over_allocated:pve2:cores" not in f2 and d2["capacity"]["pve2"]["total"]["cores"] == 8 and d2["capacity"]["pve2"]["cores_declared"] == 4
+assert f2["firewall_orphan:old"]["accepted"] == "VM made by hand, firewall only" and "accepted" not in f2["ip_mismatch:db"]
+assert ci.ratio("x") == 1 and ci.ratio(100) == 64 and ci.ratio(0.5) == 1
+with tempfile.TemporaryDirectory() as t2:
+    every = {f["id"]: "on purpose" for f in data["findings"]}
+    c = pathlib.Path(t2) / "c.json"
+    c.write_text(json.dumps({**json.loads((HERE / "example/cairn-iac.json").read_text(encoding="utf-8")),
+                             "repo": str((HERE / "example").resolve()), "accepted_findings": every}), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(c), "--check"], capture_output=True, text=True)
+    assert r.returncode == 0 and "(accepted: on purpose)" in r.stdout and "0 warnings, 0 notes, 10 accepted" in r.stderr, r
+
 # ---- node capacity: sums of what Tofu gives each node's guests, against the declared totals ----
 cap = data["capacity"]
 assert {n: (c["guests"], c["cores"], c["memory"], c["disk"], c["total"]) for n, c in cap.items()} == {
@@ -267,6 +286,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "node" in refused(app2.put_settings, {"node_capacity": {"pve 1": {"cores": 8}}})
     app2.put_settings({"node_capacity": {"pve1": {"cores": 8, "memory": 4096}, "pve2": {}}})
     assert app2.settings()["node_capacity"] == {"pve1": {"cores": 8, "memory": 4096}}
+    app2.put_settings({"vcpu_ratio": 4, "accepted_findings": {"firewall_orphan:old": " made by hand "}})
+    assert (app2.settings()["vcpu_ratio"], app2.settings()["accepted_findings"]) == (4, {"firewall_orphan:old": "made by hand"})
+    assert "reason" in refused(app2.put_settings, {"accepted_findings": {"firewall_orphan:old": " "}})
+    assert "reason" in refused(app2.put_settings, {"accepted_findings": {"bad id": "x"}})
+    assert "vcpu_ratio" in refused(app2.put_settings, {"vcpu_ratio": 0})
+    assert "vcpu_ratio" in refused(app2.put_settings, {"vcpu_ratio": True})
     assert "depth" in refused(app2.put_settings, {"git": {**cfg["git"], "depth": "0"}})
 
     # AGit: who proposed it and the commit body in the pull request description, on one line

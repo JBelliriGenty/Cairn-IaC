@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0 (2026-11-07)
+
+- Accept a drift finding (server): a reason is required; the finding stays
+  listed, greyed, with its reason, and no longer counts in the menu badge,
+  the overview or `--check` (printed as `ok … (accepted: …)`). Stored in
+  `accepted_findings` (`{finding id: reason}`), also readable from the
+  config file for CI. Each finding now has a stable `id`
+  (`kind:machine[:detail]`) that survives a value change.
+- `vcpu_ratio` (Settings → Node capacity, default 1): vCPU a node may give
+  per declared core, since CPU time is shared; memory and disk stay 1 for 1.
+
 ## 1.2.0 (2026-11-07)
 
 - `GET /api/summary` for dashboards such as Homepage, opened by a bearer

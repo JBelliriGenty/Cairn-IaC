@@ -31,6 +31,10 @@ DEFAULTS = {
     "required_roles": [],
     # What each Proxmox node can give its guests: {node: {cores, memory (GiB), disk (GB)}}; empty: sums only.
     "node_capacity": {},
+    # vCPU a node may hand out per declared core (CPU time is shared; memory and disk are not): 4 = up to 4 vCPU per core.
+    "vcpu_ratio": 1,
+    # Drift findings known and kept on purpose: {finding id: reason}. Still listed, greyed; --check does not fail on them.
+    "accepted_findings": {},
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
@@ -368,8 +372,10 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
                 got.setdefault(key(h), set()).update(p["roles"])
     out = []
 
-    def add(kind, sev, machine, file, line, msg, **v):
-        out.append({"kind": kind, "severity": sev, "machine": machine, "file": file, "line": line, "msg": msg, "vars": v})
+    def add(kind, sev, machine, file, line, msg, ident="", **v):
+        # id: what the finding is about, not its numbers, so accepting it survives a value change.
+        fid = f"{kind}:{machine}" + (f":{ident}" if ident else "")
+        out.append({"id": fid, "kind": kind, "severity": sev, "machine": machine, "file": file, "line": line, "msg": msg, "vars": v})
 
     for k, m in sorted(tofu.items()):
         a, b = ip_or_none(m["ip"]), ip_or_none(ips.get(hosts.get(k)))
@@ -401,18 +407,22 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
         what = (f["proto"] or f["macro"] or "all") + (f"/{f['dport']}" if f["dport"] else "")
         if f["dir"] == "out":
             add("half_open", "info", f["owner"], f["file"], f["line"], "{src} may send {what} to {dst}, but no rule on {dst} lets it in",
-                src=f["src"]["k"], dst=f["dst"]["k"], what=what)
+                ident=f"{f['src']['k']}>{f['dst']['k']}:{what}", src=f["src"]["k"], dst=f["dst"]["k"], what=what)
         else:
             add("half_open", "info", f["owner"], f["file"], f["line"], "{dst} lets {what} in from {src}, but no rule on {src} lets it out",
-                src=f["src"]["k"], dst=f["dst"]["k"], what=what)
+                ident=f"{f['src']['k']}>{f['dst']['k']}:{what}", src=f["src"]["k"], dst=f["dst"]["k"], what=what)
     for n, c in (cap or {}).items():
         for f, what, scale in CAP:
             if c["total"].get(f) is not None and c[f] > c["total"][f]:
                 if f == "disk" and c[f] >= 1024:  # as the page shows it: TB of 1024 GB
                     scale, what = 1024, "TB of disk"
-                add("over_allocated", "warn", n, "", 0, "{node} gives its guests {used} {what}, more than the {total} declared",
+                add("over_allocated", "warn", n, "", 0, "{node} gives its guests {used} {what}, more than the {total} declared", ident=f,
                     node=c["name"], used=f"{round(c[f] / scale, 2):g}", total=f"{round(c['total'][f] / scale, 2):g}", what=what)
-    return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], f["file"], f["line"]))
+    accepted = cfg.get("accepted_findings") or {}
+    for f in out:
+        if f["id"] in accepted:
+            f["accepted"] = accepted[f["id"]]
+    return sorted(out, key=lambda f: (f["severity"] != "warn", f["kind"], "accepted" in f, f["file"], f["line"]))
 
 
 # (field, unit in messages, declared unit / Tofu unit): Tofu gives memory in MiB, node_capacity declares it in GiB.
@@ -425,7 +435,15 @@ def num(v):
     return int(m.group(1)) if m else None
 
 
-def capacity(machines, declared):
+def ratio(v):
+    """vcpu_ratio as a number between 1 and 64 (a bad value counts as 1)."""
+    try:
+        return min(max(float(v), 1.0), 64.0)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def capacity(machines, declared, ratio=1):
     """Per node (key): sums of the vCPU, memory and disk Tofu gives its guests; unknown: guests whose value is not
     a literal number; total: the node's capacity from the settings (node_capacity, memory in GiB), in Tofu's units
     (memory in MiB), {} when not declared."""
@@ -444,6 +462,9 @@ def capacity(machines, declared):
     for n, tot in (declared or {}).items():
         c = out.setdefault(key(n), blank(n))
         c["total"] = {f: num(tot.get(f)) * k for f, _, k in CAP if isinstance(tot, dict) and num(tot.get(f))}
+        if "cores" in c["total"]:
+            c["cores_declared"] = c["total"]["cores"]
+            c["total"]["cores"] = round(c["total"]["cores"] * ratio, 2)
     return dict(sorted(out.items()))
 
 
@@ -489,7 +510,7 @@ def collect(cfg, repo):
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
-    cap = capacity(machines, cfg.get("node_capacity"))
+    cap = capacity(machines, cfg.get("node_capacity"), ratio(cfg.get("vcpu_ratio")))
     findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"), fl, cap)
     inv_parent = (repo / cfg["inventory"]).parent.parent
     try:
@@ -561,10 +582,12 @@ def check(cfg_path, as_json):
     else:
         for f in findings:
             where = f"{f['file']}:{f['line']}" if f["file"] else "node_capacity"
-            print(f"{f['severity']:<5} {f['kind']:<19} {where}  {f['msg'].format(**f['vars'])}")
-        n = sum(f["severity"] == "warn" for f in findings)
-        print(f"cairn-iac: {n} warnings, {len(findings) - n} notes", file=sys.stderr)
-    return 1 if any(f["severity"] == "warn" for f in findings) else 0
+            sev = "ok" if "accepted" in f else f["severity"]
+            print(f"{sev:<5} {f['kind']:<19} {where}  {f['msg'].format(**f['vars'])}" + (f"  (accepted: {f['accepted']})" if "accepted" in f else ""))
+        n = sum(f["severity"] == "warn" and "accepted" not in f for f in findings)
+        a = sum("accepted" in f for f in findings)
+        print(f"cairn-iac: {n} warnings, {len(findings) - n - a} notes, {a} accepted", file=sys.stderr)
+    return 1 if any(f["severity"] == "warn" and "accepted" not in f for f in findings) else 0
 
 
 def escape(s):
@@ -1416,6 +1439,15 @@ class App:
                 v = [name_ok(x, "playbook") for x in (v or [])]
             elif k == "required_roles":
                 v = [name_ok(x, "role") for x in (v or [])]
+            elif k == "vcpu_ratio":
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not 1 <= v <= 64:
+                    raise Refused("Invalid {what}: {value}", what=k, value=str(v)[:20])
+            elif k == "accepted_findings":
+                if not isinstance(v, dict) or len(v) > 500 or not all(
+                        isinstance(i, str) and re.fullmatch(r"[a-z_]+:[^\s]{1,200}", i) and isinstance(r, str) and 0 < len(r.strip()) <= 200 and "\n" not in r
+                        for i, r in v.items()):
+                    raise Refused("A reason is required (200 characters at most) to accept a drift finding")
+                v = {i: r.strip() for i, r in v.items()}
             elif k == "node_capacity":
                 ok = lambda x: isinstance(x, int) and not isinstance(x, bool) and 0 < x < 1 << 40
                 if not isinstance(v, dict) or not all(isinstance(c, dict) and all(f in FIELDS and ok(x) for f, x in c.items()) for c in v.values()):

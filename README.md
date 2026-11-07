@@ -136,7 +136,10 @@ The Drift view (with a count in the menu and on the overview) and
 - a guest firewall turned off (`enabled = false`) that has rules: they
   protect nothing;
 - an inventory host missing one of the `required_roles`;
-- a node given more vCPU, memory or disk than its `node_capacity`.
+- a node given more vCPU, memory or disk than its `node_capacity` (vCPU × `vcpu_ratio`).
+
+A finding known and kept on purpose can be **accepted** with a reason (server: the Accept button; else
+`accepted_findings` in the config, keyed by the finding's `id` from `--check --json`).
 
 Notes (they can be on purpose):
 
@@ -179,6 +182,8 @@ Every key is optional; paths are relative to the config file.
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
+| `vcpu_ratio` | vCPU a node may give per declared core, CPU time being shared (`1`; e.g. `4`) |
+| `accepted_findings` | `{finding id: reason}`: drift findings kept on purpose, still listed but not counted, `--check` passes on them (empty) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
 | `links` | `{name, view, edit, commit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}`; `commit` with `{sha}`, for the machine history (server) |
