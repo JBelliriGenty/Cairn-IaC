@@ -69,6 +69,27 @@ with tempfile.TemporaryDirectory() as t2:
     r = subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(c), "--check"], capture_output=True, text=True)
     assert r.returncode == 0 and "(accepted: on purpose)" in r.stdout and "0 warnings, 0 notes, 10 accepted" in r.stderr, r
 
+# ---- the repository's settings file (.cairn-iac.json) wins over the config; a wrong type is left out, with a finding ----
+with tempfile.TemporaryDirectory() as t3:
+    repo3 = pathlib.Path(t3)
+    shutil.copytree(HERE / "example", repo3, dirs_exist_ok=True)
+    cfg3 = {**cfg2, "accepted_findings": {"ip_mismatch:db": "from the config"}}
+    (repo3 / ".cairn-iac.json").write_text(json.dumps({"accepted_findings": {"firewall_orphan:old": "made by hand"}, "vcpu_ratio": 2,
+                                                       "required_roles": "base", "other": 1}), encoding="utf-8")
+    d3 = ci.collect(cfg3, repo3)
+    f3 = {f["id"]: f for f in d3["findings"]}
+    assert f3["firewall_orphan:old"]["accepted"] == "made by hand" and "accepted" not in f3["ip_mismatch:db"]  # the file wins
+    assert "over_allocated:pve2:cores" not in f3 and d3["repo_settings"] == {"file": ".cairn-iac.json", "keys": ["accepted_findings", "vcpu_ratio"],
+                                                                              "error": ".cairn-iac.json: wrong type for required_roles"}, d3["repo_settings"]
+    assert f3["repo_settings:.cairn-iac.json"]["severity"] == "warn" and "required_roles:printer" in f3  # config's required_roles kept
+    (repo3 / ".cairn-iac.json").write_text("{not json", encoding="utf-8")
+    d3 = ci.collect(cfg3, repo3)
+    assert d3["repo_settings"]["keys"] == [] and d3["findings"][0]["kind"] == "repo_settings" and "accepted" in {f["id"]: f for f in d3["findings"]}["ip_mismatch:db"]
+    (repo3 / ".cairn-iac.json").unlink()
+    d3 = ci.collect(cfg3, repo3)
+    assert d3["repo_settings"] == {"file": ".cairn-iac.json", "keys": [], "error": ""} and ci.collect({**cfg3, "repo_settings": ""}, repo3)["repo_settings"] is None
+    assert ci.repo_settings({"repo_settings": "../x.json"}, repo3) == ({}, None, "")
+
 # ---- node capacity: sums of what Tofu gives each node's guests, against the declared totals ----
 cap = data["capacity"]
 assert {n: (c["guests"], c["cores"], c["memory"], c["disk"], c["total"]) for n, c in cap.items()} == {
@@ -206,6 +227,24 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "shrink" in refused(ci.apply, {"op": "resources", "file": "tofu/main.tf", "line": 32, "disk": 10}, cfg, repo)
     assert "reload" in refused(ci.apply, {"op": "resources", "file": "tofu/main.tf", "line": 33, "cores": 2}, cfg, repo)
     assert "Unknown file" in refused(ci.apply, {"op": "resources", "file": "../x.tf", "line": 1}, cfg, repo)
+
+    # accept: an edit of the repository's settings file, created when missing, sorted, other keys kept
+    acc = lambda: json.loads((repo / ".cairn-iac.json").read_text(encoding="utf-8"))
+    assert run({"op": "accept", "id": "ip_mismatch:db", "reason": " moved on purpose "}) == "drift: accept ip_mismatch:db (moved on purpose)"
+    assert acc() == {"accepted_findings": {"ip_mismatch:db": "moved on purpose"}}
+    (repo / ".cairn-iac.json").write_text(json.dumps({**acc(), "vcpu_ratio": 4}), encoding="utf-8")
+    run({"op": "accept", "id": "firewall_orphan:old", "reason": "made by hand"})
+    assert list(acc()["accepted_findings"]) == ["firewall_orphan:old", "ip_mismatch:db"] and acc()["vcpu_ratio"] == 4
+    assert (repo / ".cairn-iac.json").read_text(encoding="utf-8").endswith(chr(125) + chr(10))
+    assert run({"op": "accept", "id": "ip_mismatch:db", "reason": None}) == "drift: stop accepting ip_mismatch:db"
+    assert acc()["accepted_findings"] == {"firewall_orphan:old": "made by hand"}
+    assert "Nothing changes" in refused(ci.apply, {"op": "accept", "id": "ip_mismatch:db", "reason": None}, cfg, repo)
+    assert "reason is required" in refused(ci.apply, {"op": "accept", "id": "ip_mismatch:db", "reason": " "}, cfg, repo)
+    assert "Invalid finding" in refused(ci.apply, {"op": "accept", "id": "bad id", "reason": "x"}, cfg, repo)
+    assert "No settings file" in refused(ci.apply, {"op": "accept", "id": "ip_mismatch:db", "reason": "x"}, {**cfg, "repo_settings": ""}, repo)
+    (repo / ".cairn-iac.json").write_text("[]", encoding="utf-8")
+    assert "not a JSON object" in refused(ci.apply, {"op": "accept", "id": "ip_mismatch:db", "reason": "x"}, cfg, repo)
+    (repo / ".cairn-iac.json").unlink()
 
     # firewall: add then remove, provider resource
     rule = {"dir": "in", "proto": "tcp", "dport": "22", "addr": "10.0.0.0/24", "comment": "SSH from the LAN"}

@@ -141,6 +141,30 @@ The Drift view (with a count in the menu and on the overview) and
 A finding known and kept on purpose can be **accepted** with a reason (server: the Accept button; else
 `accepted_findings` in the config, keyed by the finding's `id` from `--check --json`).
 
+**In the repository, for CI.** `accepted_findings`, `vcpu_ratio`, `node_capacity` and `required_roles`
+can live in `.cairn-iac.json` at the root of the IaC repository (key `repo_settings`); they win over the
+config and the server's settings, so `--check` in CI and the page agree. The server's Accept button then
+edits that file like any other change (diff, commit, pull request in `agit`/`branch` mode: the acceptance
+counts once merged).
+
+```json
+{"accepted_findings": {"not_in_tofu:nas": "made before the repository"}, "vcpu_ratio": 4}
+```
+
+A CI job (Forgejo Actions or GitHub Actions; the script needs Python 3 and PyYAML), run from the
+repository's root with no config file, takes the defaults and this file:
+
+```yaml
+on: {push: {branches: [main]}, pull_request: {}}
+jobs:
+  check:
+    runs-on: docker            # GitHub: ubuntu-latest
+    steps:
+      - run: apt-get update -qq && apt-get install -y -qq python3-yaml
+      - uses: actions/checkout@v4
+      - run: python3 path/to/cairn-iac.py --check
+```
+
 Notes (they can be on purpose):
 
 - an inventory host no Tofu block creates, outside the node and
@@ -184,6 +208,7 @@ Every key is optional; paths are relative to the config file.
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `vcpu_ratio` | vCPU a node may give per declared core, CPU time being shared (`1`; e.g. `4`) |
 | `accepted_findings` | `{finding id: reason}`: drift findings kept on purpose, still listed but not counted, `--check` passes on them (empty) |
+| `repo_settings` | a JSON file in the repository whose `accepted_findings`, `vcpu_ratio`, `node_capacity`, `required_roles` win over these (`.cairn-iac.json`; empty: none) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
 | `links` | `{name, view, edit, commit}`: "View in / Edit in" links to your Git web UI, URL templates with `{file}` (repo-relative) and `{line}`; `commit` with `{sha}`, for the machine history (server) |

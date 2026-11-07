@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0 (2026-11-07)
+
+- Settings that CI must share with the page live in the repository:
+  `repo_settings` (default `.cairn-iac.json`, a JSON file at the root of
+  the IaC repository). Its `accepted_findings`, `vcpu_ratio`,
+  `node_capacity` and `required_roles` win over the config and the
+  server's settings; Settings says which fields the file sets. A value of
+  the wrong type is left out, and an unusable file is a drift warning.
+- With that file, Accept / Stop accepting edits it like any other change:
+  diff, commit, and in `agit` or `branch` mode a pull request, so the
+  acceptance counts once merged. Without it (`repo_settings` empty), the
+  server's settings keep them, as in 1.3.0.
+- README: running `--check` in CI (Forgejo Actions example).
+
 ## 1.3.0 (2026-11-07)
 
 - Accept a drift finding (server): a reason is required; the finding stays

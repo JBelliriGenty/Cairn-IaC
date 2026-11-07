@@ -474,7 +474,7 @@ const FR = {
   "Node capacity": "Capacité des nœuds",
   "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.":
     "Ce que chaque nœud peut donner à ses invités ; vide : la carte ne montre que les sommes. Un nœud au-delà de sa capacité est un avertissement d'écart.",
-  "node": "nœud", "node_capacity": "capacité des nœuds",
+  "node": "nœud", "node_capacity": "capacité des nœuds", "required_roles": "rôles obligatoires",
   "Roles every inventory machine must get (comma-separated)": "Rôles que toute machine de l'inventaire doit recevoir (séparés par des virgules)",
   // server mode: forms, settings, refusals sent by the server
   "Commit {sha} sent as a pull request ({ref}). Once merged: plan and apply, or run the playbook, as the path shows.": "Commit {sha} envoyé en demande de fusion ({ref}). Une fois fusionnée : plan et apply, ou le playbook, comme le trajet l'indique.",
@@ -586,6 +586,15 @@ const FR = {
   "git {cmd}: {err}": "git {cmd} : {err}",
   "The repository moved since the page was loaded: reload the page": "Le dépôt a bougé depuis le chargement de la page : rechargez-la",
   "Nothing changes": "Rien ne change",
+  "No settings file in the repository (Settings: repo_settings)": "Pas de fichier de réglages dans le dépôt (Réglages : repo_settings)",
+  "{file} is not a JSON object: edit it in the file": "{file} n'est pas un objet JSON : corrigez-le dans le fichier",
+  "The repository's settings file cannot be used: {error}": "Le fichier de réglages du dépôt est inutilisable : {error}",
+  "Settings file of the repository": "Fichier de réglages du dépôt",
+  "Settings file in the repository (JSON, empty: these settings only): its accepted findings, vCPU ratio, node capacity and required roles win over the settings here, and CI reads them too. With it, accepting a finding is a commit.":
+    "Fichier de réglages dans le dépôt (JSON, vide : ces réglages seuls) : ses écarts acceptés, ratio vCPU, capacité des nœuds et rôles obligatoires l'emportent sur les réglages d'ici, et la CI les lit aussi. Avec lui, accepter un écart est un commit.",
+  "Set by {file} in the repository, which wins over this page: {keys}. Change it there.": "Fixé par {file} dans le dépôt, prioritaire sur cette page : {keys}. Modifiez-le là.",
+  "Written into {file}: the acceptance counts once the pull request is merged.": "Écrit dans {file} : l'acceptation compte une fois la demande de fusion fusionnée.",
+  "Written into {file} with a commit.": "Écrit dans {file} par un commit.",
   "No Git remote set": "Aucun dépôt distant réglé",
   "Git did not answer in time": "Git n'a pas répondu à temps",
   "Not found": "Introuvable",
@@ -996,7 +1005,8 @@ const FORM = [
   ["Repository layout", [["tofu_dir", "Tofu directory"], ["inventory", "Ansible inventory"], ["playbooks", "Playbooks directory"], ["roles", "Roles directory"]]],
   ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Group of the physical machines outside the cluster"],
     ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
-  ["Drift", [["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
+  ["Drift", [["repo_settings", "Settings file in the repository (JSON, empty: these settings only): its accepted findings, vCPU ratio, node capacity and required roles win over the settings here, and CI reads them too. With it, accepting a finding is a commit."],
+    ["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
   ["Node capacity", [["vcpu_ratio", "vCPU per declared core (CPU time is shared: 4 = up to 4 vCPU per core; memory and disk stay 1 for 1)", "num"], ["node_capacity", "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.", "cap"]]],
   ["Path of a change", [["workflow.example", "Machine shown first"], ["workflow.workstation", "Workstation"], ["workflow.tofu", "Tofu command"],
     ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
@@ -1023,9 +1033,11 @@ function renderSettings() {
     }
     if (type === "num") return `<label class="wide">${esc(label)}<input type="number" min="1" max="64" step="0.5" id="${id}" data-p="${p}" data-t="num" value="${esc(v ?? 1)}" style="max-width:120px"></label>`;
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
-    return `<label${/url|text|generic|required/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$/.test(p) ? ' class="mono"' : ""}></label>`;
+    return `<label${/url|text|generic|required|repo_settings/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$|repo_settings/.test(p) ? ' class="mono"' : ""}></label>`;
   };
-  $("#settings").innerHTML = FORM.map(([title, fs]) => `<article class="card"><h3>${t(title)}</h3><div class="form">${fs.map(field).join("")}</div></article>`).join("")
+  // keys the repository's settings file sets win over the fields here: say so under their card
+  const RS = D.repo_settings, fixed = fs => RS ? fs.map(f => f[0]).filter(p => RS.keys.includes(p)) : [];
+  $("#settings").innerHTML = FORM.map(([title, fs]) => `<article class="card"><h3>${t(title)}</h3>${fixed(fs).length ? `<p class="sub">${esc(t("Set by {file} in the repository, which wins over this page: {keys}. Change it there.", {file: RS.file, keys: fixed(fs).map(k => t(k)).join(", ")}))}</p>` : ""}<div class="form">${fs.map(field).join("")}</div></article>`).join("")
     + `<article class="card"><h3>${t("Deploy key")}</h3><p class="sub">${t("Give this key write access to the repository (a deploy key on the Git server), for an ssh:// remote.")}</p>
       ${S.key ? `<code class="key" id="s-key">${esc(S.key)}</code><div class="row" style="margin-top:8px"><button class="small" id="s-copy">${t("Copy")}</button><button class="small" id="s-test">${t("Test the connection")}</button><span class="sub" id="s-test-out"></span></div>` : `<p class="empty">${t("No key: ssh-keygen is missing on the server.")}</p>`}
       <p class="sub">${esc(S.synced ? t("Last sync: {time}", {time: S.synced}) : t("Not synchronised yet."))}</p>${S.sync_error ? `<p class="err">${esc(S.sync_error)}</p>` : ""}</article>
@@ -1070,7 +1082,7 @@ $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><
 
 // ---------- drift: findings of cairn-iac.py, grouped by kind, warnings first ----------
 const KINDS = {not_in_inventory: "Created by Tofu, not in the inventory", ip_mismatch: "Addresses that differ", firewall_off: "Firewalls turned off",
-  firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", not_in_tofu: "In the inventory, not created by Tofu",
+  repo_settings: "Settings file of the repository", firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", not_in_tofu: "In the inventory, not created by Tofu",
   no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows", over_allocated: "Nodes over their capacity"};
 $("#drift-lead").innerHTML = esc(t("Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.", {cmd: "\u0000"})).replace("\u0000", code("cairn-iac.py --check"));
 const byKind = {};
@@ -1091,18 +1103,24 @@ function saveAccepted(change, where) {
   api("/api/settings", st).then(() => { location.hash = "drift"; location.reload(); },
     e => { where.querySelector(".err")?.remove(); where.insertAdjacentHTML("beforeend", `<p class="err" role="alert">${esc(errText(e))}</p>`); });
 }
+// with a settings file in the repository, accepting is an edit of that file (preview, commit, maybe a pull request);
+// a finding accepted in the server's settings only (the file sets no accepted_findings) is still undone there
+const repoFile = () => EDIT && S.settings.repo_settings;
+const inSettings = id => (S.settings.accepted_findings || {})[id] && !(D.repo_settings && D.repo_settings.keys.includes("accepted_findings"));
 $("#drift-list").addEventListener("click", e => {
   const b = e.target.closest("[data-accept]"); if (!b) return;
-  const id = b.dataset.accept, li = b.closest("li");
-  if ((S.settings.accepted_findings || {})[id]) return saveAccepted(a => delete a[id], li);
+  const id = b.dataset.accept, li = b.closest("li"), f = F.find(x => x.id === id);
+  if (f && f.accepted) return repoFile() && !inSettings(id) ? preview({op: "accept", id, reason: null}, li) : saveAccepted(a => delete a[id], li);
   if (li.querySelector(".accept-form")) return;
-  li.insertAdjacentHTML("beforeend", `<form class="accept-form"><input name="reason" maxlength="200" required placeholder="${esc(t("Why it is on purpose"))}" aria-label="${esc(t("Why it is on purpose"))}"><button class="primary small">${t("Accept")}</button></form>`);
+  const mode = S.settings.git.url && S.settings.git.push ? S.settings.git.mode : "push";
+  const note = repoFile() ? `<p class="sub" style="flex-basis:100%;margin:0">${esc(t(mode === "push" ? "Written into {file} with a commit." : "Written into {file}: the acceptance counts once the pull request is merged.", {file: S.settings.repo_settings}))}</p>` : "";
+  li.insertAdjacentHTML("beforeend", `<form class="accept-form"><input name="reason" maxlength="200" required placeholder="${esc(t("Why it is on purpose"))}" aria-label="${esc(t("Why it is on purpose"))}"><button class="primary small">${t("Accept")}</button>${note}</form>`);
   li.querySelector(".accept-form input").focus();
 });
 $("#drift-list").addEventListener("submit", e => {
   e.preventDefault();
   const id = e.target.closest("li").querySelector("[data-accept]").dataset.accept, reason = e.target.reason.value.trim();
-  if (reason) saveAccepted(a => { a[id] = reason; }, e.target.closest("li"));
+  if (reason) repoFile() ? preview({op: "accept", id, reason}, e.target) : saveAccepted(a => { a[id] = reason; }, e.target.closest("li"));
 });
 
 // ---------- flows: one per guest firewall rule, endpoints resolved to machines by cairn-iac.py ----------

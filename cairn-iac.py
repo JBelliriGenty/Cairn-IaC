@@ -35,6 +35,9 @@ DEFAULTS = {
     "vcpu_ratio": 1,
     # Drift findings known and kept on purpose: {finding id: reason}. Still listed, greyed; --check does not fail on them.
     "accepted_findings": {},
+    # A JSON file in the repository whose REPO_KEYS win over these settings, so CI (--check) and the page read the
+    # same values; with it, accepting a finding is a commit (pull request) like any edit. Empty: settings only.
+    "repo_settings": ".cairn-iac.json",
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
@@ -435,6 +438,33 @@ def num(v):
     return int(m.group(1)) if m else None
 
 
+REPO_KEYS = ("accepted_findings", "vcpu_ratio", "node_capacity", "required_roles")
+FINDING_ID = re.compile(r"[a-z_]+:[^\s]{1,200}")
+
+
+def repo_settings(cfg, repo):
+    """(values of REPO_KEYS read from the repository's settings file, its repo-relative path or None, error or "")."""
+    rel = str(cfg.get("repo_settings") or "")
+    if not rel or rel.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(rel).parts:
+        return {}, None, ""
+    path = repo / rel
+    if not path.is_file():
+        return {}, rel, ""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("not a JSON object")
+    except ValueError as e:
+        return {}, rel, f"{rel}: {e}"
+    # Values of the wrong type are left out (the settings' value stays), not guessed.
+    ok = {"accepted_findings": lambda v: isinstance(v, dict) and all(isinstance(i, str) and isinstance(r, str) for i, r in v.items()),
+          "vcpu_ratio": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+          "node_capacity": lambda v: isinstance(v, dict) and all(isinstance(c, dict) for c in v.values()),
+          "required_roles": lambda v: isinstance(v, list) and all(isinstance(r, str) for r in v)}
+    bad = [k for k in REPO_KEYS if k in raw and not ok[k](raw[k])]
+    return {k: raw[k] for k in REPO_KEYS if k in raw and k not in bad}, rel, f"{rel}: wrong type for {', '.join(bad)}" if bad else ""
+
+
 def ratio(v):
     """vcpu_ratio as a number between 1 and 64 (a bad value counts as 1)."""
     try:
@@ -507,6 +537,8 @@ EXPORT = ("title", "rev", "machines", "capacity", "firewalls", "roles", "playboo
 
 
 def collect(cfg, repo):
+    over, rs_file, rs_error = repo_settings(cfg, repo)
+    cfg = {**cfg, **over}
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
@@ -525,7 +557,11 @@ def collect(cfg, repo):
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
         "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "capacity": cap, "server": None,
+        "repo_settings": {"file": rs_file, "keys": sorted(over), "error": rs_error} if rs_file else None,
     }
+    if rs_error:
+        findings.insert(0, {"id": "repo_settings:" + rs_file, "kind": "repo_settings", "severity": "warn", "machine": "", "file": rs_file,
+                            "line": 1, "msg": "The repository's settings file cannot be used: {error}", "vars": {"error": rs_error}})
     data["machines"] = merge(data)
     return data
 
@@ -533,7 +569,7 @@ def collect(cfg, repo):
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None}
 
 
 def favicon():
@@ -1142,6 +1178,35 @@ def apply(op, cfg, repo):
         if o == "group_add":
             return one(rel, old, group_add(old, group, host, op.get("ip") or ""), f"inventory: add {host} to {group}")
         return one(rel, old, group_del(old, group, host), f"inventory: remove {host} from {group}")
+    if o == "accept":
+        fid, reason = str(op.get("id") or ""), op.get("reason")
+        rel = str(cfg.get("repo_settings") or "")
+        if not rel or rel.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(rel).parts or not rel.endswith(".json"):
+            raise Refused("No settings file in the repository (Settings: repo_settings)")
+        if not FINDING_ID.fullmatch(fid):
+            raise Refused("Invalid {what}: {value}", what="finding", value=fid[:60])
+        path = repo / rel
+        old = path.read_text(encoding="utf-8") if path.is_file() else ""
+        try:
+            data = json.loads(old) if old.strip() else {}
+            if not isinstance(data, dict):
+                raise ValueError
+        except ValueError:
+            raise Refused("{file} is not a JSON object: edit it in the file", file=rel)
+        acc = dict(data.get("accepted_findings") or {})
+        if reason is None:
+            if fid not in acc:
+                raise Refused("Nothing changes")
+            del acc[fid]
+            msg = f"drift: stop accepting {fid}"
+        else:
+            reason = str(reason).strip()
+            if not reason or len(reason) > 200 or "\n" in reason:
+                raise Refused("A reason is required (200 characters at most) to accept a drift finding")
+            acc[fid] = reason
+            msg = f"drift: accept {fid} ({reason})"
+        data["accepted_findings"] = dict(sorted(acc.items()))
+        return one(rel, old, json.dumps(data, ensure_ascii=False, indent=2) + "\n", msg)
     if o == "role_add":
         pb, role, host = op.get("playbook"), op.get("role"), op.get("host")
         return one(*playbook_edit(cfg, repo, pb, role, host), f"{pb}: apply {role} to {host}")
@@ -1459,6 +1524,8 @@ class App:
                 v = {a: (b if isinstance(b, bool) else str(b)[:500]) for a, b in (v or {}).items()} if v is not None else None
             else:
                 v = str(v or "")[:500]
+            if k == "repo_settings" and v and (v.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(v).parts or not v.endswith(".json")):
+                raise Refused("Invalid {what}: {value}", what=k, value=v)
             if k in ("tofu_dir", "inventory", "playbooks", "roles") and (not v or v.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(v).parts):
                 raise Refused("Invalid {what}: {value}", what=k, value=v)
             out[k] = v
