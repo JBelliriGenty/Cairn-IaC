@@ -12,7 +12,7 @@ its guest firewall, and the Ansible roles it receives (with their task names).
 Needs Python 3.8+ and PyYAML (Debian: python3-yaml); the server also needs git
 (and ssh for an ssh:// remote). Never runs tofu or ansible.
 """
-import argparse, base64, difflib, hmac, http.server, ipaddress, json, os, pathlib, re, shutil, subprocess, sys, tempfile, threading, time, urllib.parse
+import argparse, base64, difflib, hmac, http.server, ipaddress, json, os, pathlib, re, shutil, ssl, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request
 
 try:
     import yaml
@@ -38,6 +38,8 @@ DEFAULTS = {
     # A JSON file in the repository whose REPO_KEYS win over these settings, so CI (--check) and the page read the
     # same values; with it, accepting a finding is a commit (pull request) like any edit. Empty: settings only.
     "repo_settings": ".cairn-iac.json",
+    # The repository's Renovate config: the Updates view shows and edits which update types merge themselves. Empty: no view.
+    "renovate_file": "renovate.json",
     "workflow": {},
     # Server only: where new guest firewall rules go in a firewall module.
     "firewall_lists": {"in": "inbound_rules", "out": "outbound_rules"},
@@ -59,6 +61,9 @@ SERVER = {
     "name_header": "Remote-Name", "email_header": "Remote-Email", "require_groups": [],
     # File holding a token (32 characters min.) that opens GET /api/summary to dashboards; empty: closed.
     "summary_token_file": "",
+    # Forgejo/Gitea API (https://host/api/v1), owner/repo and a read token file: the Updates view lists the open Renovate
+    # pull requests with their CI state. ca_file: a CA bundle for the API's certificate (empty: the system's).
+    "forge_api": "", "forge_repo": "", "forge_token_file": "", "forge_ca_file": "",
 }
 VM_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
 FW_RESOURCE = "proxmox_virtual_environment_firewall_rules"
@@ -224,31 +229,22 @@ def read_ansible(cfg, repo):
             out |= set(allhosts) if p in ("all", "*") else set(groups.get(p, [p]))
         return sorted(out)
 
-    playbooks = {}
-    for f in sorted((repo / cfg["playbooks"]).glob("*.yml")):
-        try:
-            plays = yaml.safe_load(f.read_text(encoding="utf-8")) or []
-        except yaml.YAMLError as e:
-            print(f"cairn-iac: skipped {f.name}: {e}", file=sys.stderr)
-            continue
-        items = []
-        for p in plays if isinstance(plays, list) else []:
-            if not isinstance(p, dict) or "hosts" not in p:
-                continue
-            roles = [r if isinstance(r, str) else r.get("role") or r.get("name") for r in p.get("roles") or []]
-            for t in (p.get("pre_tasks") or []) + (p.get("tasks") or []):
-                for k in ("include_role", "import_role", "ansible.builtin.include_role", "ansible.builtin.import_role"):
-                    if isinstance(t, dict) and isinstance(t.get(k), dict):
-                        roles.append(t[k].get("name"))
-            items.append({"hosts": resolve(p["hosts"]), "roles": [r for r in roles if r]})
-        playbooks[f.stem] = items
-
     roles = {}
     roles_dir = repo / cfg["roles"]
     for d in sorted(p for p in roles_dir.iterdir() if p.is_dir()) if roles_dir.exists() else []:
-        tasks = []
+        tasks, includes = [], []
         for tf in sorted((d / "tasks").glob("*.yml")):
-            tasks += re.findall(r'^- name: (.+)$', tf.read_text(encoding="utf-8"), re.M)
+            text = tf.read_text(encoding="utf-8")
+            tasks += re.findall(r'^- name: (.+)$', text, re.M)
+            try:
+                includes += role_refs(yaml.safe_load(text))
+            except yaml.YAMLError:
+                pass
+        try:
+            meta = yaml.safe_load((d / "meta/main.yml").read_text(encoding="utf-8")) if (d / "meta/main.yml").is_file() else {}
+            includes += [r if isinstance(r, str) else r.get("role") or r.get("name") for r in (meta or {}).get("dependencies") or []]
+        except yaml.YAMLError:
+            pass
         about = ""
         main = d / "tasks/main.yml"
         if main.exists():
@@ -260,8 +256,50 @@ def read_ansible(cfg, repo):
                     break
             about = "\n".join(head[:8])
         templates = sorted(p.name for p in (d / "templates").glob("*")) if (d / "templates").exists() else []
-        roles[d.name] = {"tasks": tasks, "about": about, "templates": templates}
+        roles[d.name] = {"tasks": tasks, "about": about, "templates": templates,
+                         "includes": sorted({r for r in includes if isinstance(r, str) and r != d.name and "{" not in r})}
+
+    def expand(rs):
+        """The play's roles, then the roles they include (tasks or meta dependencies), each once."""
+        out, todo = [], list(rs)
+        while todo:
+            r = todo.pop(0)
+            if r not in out:
+                out.append(r)
+                todo += roles.get(r, {}).get("includes", [])
+        return out
+
+    playbooks = {}
+    for f in sorted((repo / cfg["playbooks"]).glob("*.yml")):
+        try:
+            plays = yaml.safe_load(f.read_text(encoding="utf-8")) or []
+        except yaml.YAMLError as e:
+            print(f"cairn-iac: skipped {f.name}: {e}", file=sys.stderr)
+            continue
+        items = []
+        for p in plays if isinstance(plays, list) else []:
+            if not isinstance(p, dict) or "hosts" not in p:
+                continue
+            own = [r if isinstance(r, str) else r.get("role") or r.get("name") for r in p.get("roles") or []]
+            own += role_refs((p.get("pre_tasks") or []) + (p.get("tasks") or []) + (p.get("post_tasks") or []))
+            own = [r for r in own if isinstance(r, str) and "{" not in r]
+            items.append({"hosts": resolve(p["hosts"]), "roles": expand(own)})
+        playbooks[f.stem] = items
     return groups, direct, ips, playbooks, roles
+
+
+def role_refs(tasks):
+    """Role names of include_role / import_role in a task list, blocks included."""
+    out = []
+    for t in tasks if isinstance(tasks, list) else []:
+        if not isinstance(t, dict):
+            continue
+        for k in ("include_role", "import_role", "ansible.builtin.include_role", "ansible.builtin.import_role"):
+            if isinstance(t.get(k), dict) and t[k].get("name"):
+                out.append(t[k]["name"])
+        for k in ("block", "rescue", "always"):
+            out += role_refs(t.get(k))
+    return out
 
 
 def git_rev(repo):
@@ -465,6 +503,148 @@ def repo_settings(cfg, repo):
     return {k: raw[k] for k in REPO_KEYS if k in raw and k not in bad}, rel, f"{rel}: wrong type for {', '.join(bad)}" if bad else ""
 
 
+# ---------- Renovate: which updates merge themselves (renovate_file in the repo), and the open pull requests ----------
+AUTOMERGE = "Cairn IaC: automerge"           # description of the rule the page edits
+NO_AUTOMERGE = "Cairn IaC: no automerge: "  # prefix of the exclusions it adds (the reason follows)
+UPDATE_TYPES = ("major", "minor", "patch", "pin", "digest", "pinDigest")
+DEP_NAME = re.compile(r"[A-Za-z0-9@][A-Za-z0-9@._/:-]{0,199}")
+
+
+def repo_rel(v):
+    """A repo-relative path from a setting, or "" when empty or leaving the repository."""
+    rel = str(v or "")
+    return "" if not rel or rel.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(rel).parts else rel
+
+
+def json_object(repo, rel):
+    """(text, parsed object) of a JSON file in the repository; ("", {}) when absent; Refused when not an object."""
+    path = repo / rel
+    old = path.read_text(encoding="utf-8") if path.is_file() else ""
+    try:
+        data = json.loads(old) if old.strip() else {}
+        if not isinstance(data, dict):
+            raise ValueError
+    except ValueError:
+        raise Refused("{file} is not a JSON object: edit it in the file", file=rel)
+    return old, data
+
+
+def renovate_policy(cfg, repo):
+    """What the Renovate config says merges itself: the managed rule's update types, the rules that turn automerge off.
+    None when the setting is empty; {missing: True} when the file is not in the repository."""
+    rel = repo_rel(cfg.get("renovate_file"))
+    if not rel:
+        return None
+    out = {"file": rel, "missing": not (repo / rel).is_file(), "types": [], "rule": None, "excluded": [], "global": False, "error": ""}
+    try:
+        _, raw = json_object(repo, rel)
+    except Refused:
+        out["error"] = f"{rel}: not a JSON object"
+        return out
+    rules = [r for r in raw.get("packageRules") or [] if isinstance(r, dict)] if isinstance(raw.get("packageRules"), list) else []
+    match = lambda r: {k: v for k, v in r.items() if k.startswith(("match", "exclude"))}
+    at = next((i for i, r in enumerate(rules) if r.get("description") == AUTOMERGE), None)
+    if at is not None:
+        r = rules[at]
+        out["rule"] = {"match": {k: v for k, v in match(r).items() if k != "matchUpdateTypes"}, "on": r.get("automerge") is True,
+                       "platform": r.get("platformAutomerge") is True}
+        out["types"] = [x for x in r.get("matchUpdateTypes") or [] if x in UPDATE_TYPES] if r.get("automerge") is True else []
+    out["global"] = raw.get("automerge") is True
+    for i, r in enumerate(rules):
+        if r.get("automerge") is False and i != at:
+            d = str(r.get("description") or "")
+            # Renovate applies rules in order: an exclusion placed before the automerge rule is overridden by it.
+            out["excluded"].append({"description": d[len(NO_AUTOMERGE):] if d.startswith(NO_AUTOMERGE) else d, "match": match(r),
+                                    "managed": d.startswith(NO_AUTOMERGE), "shadowed": at is not None and i < at})
+    return out
+
+
+def automerge_edit(op, cfg, repo):
+    """The edits of the Updates view on the Renovate config: automerge types, add or remove an exclusion."""
+    rel = repo_rel(cfg.get("renovate_file"))
+    if not rel or not rel.endswith(".json"):
+        raise Refused("No Renovate config in the repository (Settings: renovate_file)")
+    old, raw = json_object(repo, rel)
+    if not old:
+        raise Refused("{file} is not in the repository", file=rel)
+    rules = raw.setdefault("packageRules", [])
+    if not isinstance(rules, list):
+        raise Refused("{file} is not a JSON object: edit it in the file", file=rel)
+    if op["op"] == "automerge":
+        types = op.get("types")
+        if not isinstance(types, list) or not all(x in UPDATE_TYPES for x in types):
+            raise Refused("Invalid {what}: {value}", what="update types", value=json.dumps(types)[:60])
+        types = [x for x in UPDATE_TYPES if x in types]
+        r = next((r for r in rules if isinstance(r, dict) and r.get("description") == AUTOMERGE), None)
+        if r is None:
+            if not types:
+                raise Refused("Nothing changes")
+            # first, so that the exclusions after it win (Renovate: the last matching rule wins)
+            rules.insert(0, r := {"description": AUTOMERGE})
+        if types:
+            r.update(matchUpdateTypes=types, automerge=True, platformAutomerge=True)
+            msg = f"renovate: automerge {', '.join(types)}"
+        else:
+            r["automerge"] = False  # off, its conditions kept for next time
+            msg = "renovate: automerge off"
+    else:
+        dep, reason = str(op.get("dep") or "").strip(), op.get("reason")
+        if not DEP_NAME.fullmatch(dep):
+            raise Refused("Invalid {what}: {value}", what="dependency", value=dep[:60])
+        mine = lambda r: isinstance(r, dict) and str(r.get("description") or "").startswith(NO_AUTOMERGE) and r.get("matchDepNames") == [dep]
+        if reason is None:
+            if not any(mine(r) for r in rules):
+                raise Refused("Nothing changes")
+            rules[:] = [r for r in rules if not mine(r)]
+            msg = f"renovate: automerge {dep} again"
+        else:
+            reason = str(reason).strip()
+            if not reason or len(reason) > 200 or "\n" in reason:
+                raise Refused("A reason is required (200 characters at most) to keep a dependency out of automerge")
+            rules[:] = [r for r in rules if not mine(r)] + [{"description": NO_AUTOMERGE + reason, "matchDepNames": [dep], "automerge": False}]
+            msg = f"renovate: no automerge for {dep} ({reason})"
+    return {"files": [(rel, old, json.dumps(raw, ensure_ascii=False, indent=2) + "\n")], "message": msg, "targets": []}
+
+
+def pr_updates(body):
+    """The updates of a Renovate pull request, from the table at the top of its description: [{dep, type, change}]."""
+    cols, rows = None, []
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            if cols:
+                break
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if cols is None:
+            cols = cells if "Package" in cells and "Update" in cells else None
+            continue
+        if not line.strip("|-: "):
+            continue
+        d = dict(zip(cols, cells))
+        m = re.match(r"\[([^\]]+)\]", d.get("Package", ""))
+        rows.append({"dep": (m.group(1) if m else d.get("Package", "")).strip(), "type": d.get("Update", ""),
+                     "change": " ".join(d.get("Change", "").replace("`", "").split())})
+    return rows
+
+
+def renovate_prs(get, repo):
+    """Open Renovate pull requests of a Forgejo/Gitea repository, with their CI state; get(path) returns parsed JSON."""
+    out = []
+    for p in get(f"/repos/{repo}/pulls?state=open&limit=50"):
+        body, ref = p.get("body") or "", (p.get("head") or {}).get("ref") or ""
+        if not ref.startswith("renovate/") and "Renovate" not in body:
+            continue
+        m = re.search(r"\*\*Automerge\*\*: (\w+)", body)
+        sha = (p.get("head") or {}).get("sha") or ""
+        st = get(f"/repos/{repo}/commits/{sha}/status") if sha else {}
+        out.append({"number": p.get("number"), "title": p.get("title") or "", "url": p.get("html_url") or "", "created": p.get("created_at") or "",
+                    "labels": [l.get("name") for l in p.get("labels") or []], "updates": pr_updates(body),
+                    "automerge": None if not m else m.group(1) == "Enabled", "mergeable": p.get("mergeable"),
+                    "ci": (st.get("state") or "none") if st.get("total_count") else "none"})
+    return sorted(out, key=lambda x: x["number"] or 0)
+
+
 def ratio(v):
     """vcpu_ratio as a number between 1 and 64 (a bad value counts as 1)."""
     try:
@@ -533,7 +713,7 @@ def merge(data):
 
 
 # What --json prints and the page's "Download JSON" gives: what the page shows, never a file's contents beyond it.
-EXPORT = ("title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows")
+EXPORT = ("title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows", "updates")
 
 
 def collect(cfg, repo):
@@ -558,6 +738,7 @@ def collect(cfg, repo):
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
         "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "capacity": cap, "server": None,
         "repo_settings": {"file": rs_file, "keys": sorted(over), "error": rs_error} if rs_file else None,
+        "updates": renovate_policy(cfg, repo),
     }
     if rs_error:
         findings.insert(0, {"id": "repo_settings:" + rs_file, "kind": "repo_settings", "severity": "warn", "machine": "", "file": rs_file,
@@ -569,7 +750,7 @@ def collect(cfg, repo):
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None, "updates": None}
 
 
 def favicon():
@@ -1185,14 +1366,7 @@ def apply(op, cfg, repo):
             raise Refused("No settings file in the repository (Settings: repo_settings)")
         if not FINDING_ID.fullmatch(fid):
             raise Refused("Invalid {what}: {value}", what="finding", value=fid[:60])
-        path = repo / rel
-        old = path.read_text(encoding="utf-8") if path.is_file() else ""
-        try:
-            data = json.loads(old) if old.strip() else {}
-            if not isinstance(data, dict):
-                raise ValueError
-        except ValueError:
-            raise Refused("{file} is not a JSON object: edit it in the file", file=rel)
+        old, data = json_object(repo, rel)
         acc = dict(data.get("accepted_findings") or {})
         if reason is None:
             if fid not in acc:
@@ -1207,6 +1381,8 @@ def apply(op, cfg, repo):
             msg = f"drift: accept {fid} ({reason})"
         data["accepted_findings"] = dict(sorted(acc.items()))
         return one(rel, old, json.dumps(data, ensure_ascii=False, indent=2) + "\n", msg)
+    if o in ("automerge", "automerge_exclude"):
+        return automerge_edit(op, cfg, repo)
     if o == "role_add":
         pb, role, host = op.get("playbook"), op.get("role"), op.get("host")
         return one(*playbook_edit(cfg, repo, pb, role, host), f"{pb}: apply {role} to {host}")
@@ -1307,6 +1483,7 @@ class App:
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "cairn-iac", "-f", str(self.key)], check=True)
         self.lock = threading.Lock()  # ponytail: one lock for sync, edits and page builds; fine for a handful of users
         self.synced, self.sync_error, self.cache, self.hist = 0.0, "", (None, None), {}
+        self.prs = (0.0, None)  # (time, last answer of updates())
         self.proxies = [ipaddress.ip_network(p, strict=False) for p in cfg["trusted_proxies"]]
         self.token = (cfg["base"] / cfg["summary_token_file"]).read_text().strip() if cfg.get("summary_token_file") else ""
         if self.token and len(self.token) < 32:
@@ -1411,6 +1588,27 @@ class App:
         return {"machines": len(data["machines"]), "firewalls": len(data["firewalls"]), "roles": len(data["roles"]),
                 "warnings": warn, "notes": len(data["findings"]) - warn, "rev": rev[:7],
                 "error": data.get("error", "") or self.sync_error}
+
+    def updates(self):
+        """Open Renovate pull requests from the Git server's API, kept 60 s; {off: True} when no API is set."""
+        c = self.cfg
+        if not (c["forge_api"] and c["forge_repo"] and c["forge_token_file"]):
+            return {"off": True, "prs": []}
+        if self.prs[1] is not None and time.time() - self.prs[0] < 60:
+            return self.prs[1]
+        try:
+            token = (c["base"] / c["forge_token_file"]).read_text().strip()
+            ctx = ssl.create_default_context(cafile=str(c["base"] / c["forge_ca_file"]) if c["forge_ca_file"] else None)
+
+            def get(path):
+                req = urllib.request.Request(c["forge_api"].rstrip("/") + path, headers={"Authorization": f"token {token}", "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+                    return json.load(r)
+            out = {"prs": renovate_prs(get, c["forge_repo"]), "error": ""}
+        except (OSError, ValueError, ssl.SSLError) as e:  # URLError is an OSError
+            out = {"prs": [], "error": str(e)[:300]}
+        self.prs = (time.time(), out)
+        return out
 
     def history(self, k):
         """A machine's latest commits (see history()), cached per commit and settings."""
@@ -1524,7 +1722,7 @@ class App:
                 v = {a: (b if isinstance(b, bool) else str(b)[:500]) for a, b in (v or {}).items()} if v is not None else None
             else:
                 v = str(v or "")[:500]
-            if k == "repo_settings" and v and (v.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(v).parts or not v.endswith(".json")):
+            if k in ("repo_settings", "renovate_file") and v and (v.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(v).parts or not v.endswith(".json")):
                 raise Refused("Invalid {what}: {value}", what=k, value=v)
             if k in ("tofu_dir", "inventory", "playbooks", "roles") and (not v or v.startswith(("/", "\\")) or ".." in pathlib.PurePosixPath(v).parts):
                 raise Refused("Invalid {what}: {value}", what=k, value=v)
@@ -1592,6 +1790,8 @@ def serve(cfg):
                     return self.send(409, {"error": e.msg, "vars": e.v})
                 except subprocess.TimeoutExpired:
                     return self.send(504, {"error": "Git did not answer in time"})
+            if self.path == "/api/updates":
+                return self.send(200, app.updates())
             if self.path.split("?")[0] != "/":
                 return self.send(404, "not found\n", "text/plain")
             self.send(200, app.page(user), "text/html")

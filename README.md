@@ -73,13 +73,15 @@ and serve the file with any web server.
 - **Ansible**: the YAML inventory (nested `children` groups included), every
   `*.yml` playbook (`hosts` patterns resolved by group, `roles` and
   `include_role`/`import_role` tasks), and each role's `tasks/*.yml` task
-  names, its leading comment and its `templates/`.
+  names, its leading comment and its `templates/`. A role included by
+  another role (`include_role`/`import_role` in its tasks, blocks included,
+  or `dependencies` in `meta/main.yml`) counts for the play's hosts too.
 
 Machines are matched across Tofu, firewalls and inventory by `vm_id` and by
 name (case-insensitive, `_` = `-`).
 
-Not followed: other modules' contents, exclusion patterns (`!host`, `&group`), roles included by
-other roles, `import_playbook`, values computed in HCL (`var.`, `local.`).
+Not followed: other modules' contents, exclusion patterns (`!host`, `&group`), role names built
+from variables, `import_playbook`, values computed in HCL (`var.`, `local.`).
 
 ## Flows
 
@@ -189,6 +191,31 @@ Each JSON finding: `kind`, `severity` (`warn` or `info`), `machine`,
 `file`, `line`, `msg` (an English template) and its `vars`. A capacity
 finding has no file (`""`, line 0): its `machine` is the node.
 
+## Updates (Renovate)
+
+With a [Renovate](https://docs.renovatebot.com) config in the repository
+(`renovate_file`, `renovate.json` by default), the **Updates** view shows
+which update types merge by themselves and lets the server change it, as a
+commit (or pull request) like any edit:
+
+- one rule is the page's, found by its description `Cairn IaC: automerge`:
+  ticking types sets its `matchUpdateTypes` with `automerge` and
+  `platformAutomerge` (Forgejo/Gitea and GitHub merge once the required
+  checks pass); other conditions written in it by hand (`matchManagers`…)
+  are kept and shown; unticking everything turns it off and keeps them. A
+  new rule goes first in `packageRules`, Renovate applying the last
+  matching rule;
+- rules with `automerge: false` are listed as kept out of automerge (one
+  placed before the page's rule is flagged: it has no effect). "Keep out"
+  adds one for a dependency, with its reason (`Cairn IaC: no automerge:
+  <reason>`); only those can be removed from the page.
+
+On a server with `forge_api`, `forge_repo` and `forge_token_file` (a
+Forgejo/Gitea token that reads the repository), the view also lists the open
+Renovate pull requests: their updates (from the table Renovate writes at the
+top), the CI state of their head commit and whether Renovate set them to
+merge by themselves (as written at its last run).
+
 ## Configuration (JSON)
 
 Every key is optional; paths are relative to the config file.
@@ -208,6 +235,7 @@ Every key is optional; paths are relative to the config file.
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `vcpu_ratio` | vCPU a node may give per declared core, CPU time being shared (`1`; e.g. `4`) |
 | `accepted_findings` | `{finding id: reason}`: drift findings kept on purpose, still listed but not counted, `--check` passes on them (empty) |
+| `renovate_file` | the repository's Renovate config, shown and edited in the Updates view (`renovate.json`; empty: no view) |
 | `repo_settings` | a JSON file in the repository whose `accepted_findings`, `vcpu_ratio`, `node_capacity`, `required_roles` win over these (`.cairn-iac.json`; empty: none) |
 | `workflow` | words of the change path, see below |
 | `note` | `{title, text}`: an extra card on the overview; `` `code` `` in `text` is shown as code |
@@ -341,6 +369,8 @@ Who may use it is set in the config file only, never from the page:
 | `require_groups` | at least one of these groups (empty: any signed-in user) |
 | `read_only` | page and Settings without editing (`false`) |
 | `summary_token_file` | file holding a token (32 characters min., `openssl rand -hex 32`) that opens `GET /api/summary` to dashboards with `Authorization: Bearer <token>`: `machines`, `firewalls`, `roles`, `warnings`, `notes` (drift), `rev`, `error` (empty: closed) |
+| `forge_api`, `forge_repo`, `forge_token_file` | Forgejo/Gitea API (`https://git.example/api/v1`), `owner/repo`, a file holding a token that reads it: open Renovate pull requests in the Updates view (empty: not listed) |
+| `forge_ca_file` | CA bundle for the API's certificate (empty: the system's) |
 | `ssh_key` | private key for the Git remote, e.g. one already allowed on the repository (`.pub` beside it); empty: generated in `data_dir` |
 | `firewall_lists` | `{in, out}`: list names that receive new rules in a firewall module (`inbound_rules`, `outbound_rules`) |
 | `git` | `{url, branch, push, mode, name, email, commit_prefix, depth}`: remote, branch (`main`), push after each commit (`true`), `mode`: `push` onto the branch, `agit` (Forgejo/Gitea: `refs/for/<branch>` opens a pull request, no API token), `branch` (a new branch per edit, open the pull request yourself); committer identity; commits kept in the clone, as far back as the machine history goes (`200`) |

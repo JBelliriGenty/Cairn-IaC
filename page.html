@@ -244,6 +244,11 @@ pre.diff { max-height: 50vh; }
 .mfind li { padding: 2px 0 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
 .mfind li.warn { border-left-color: var(--warn); color: var(--fg); }
 
+/* updates */
+.types { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0; }
+.pill.ok { background: color-mix(in srgb, var(--ok) 14%, var(--panel)); color: var(--ok); }
+.pill.bad { background: color-mix(in srgb, var(--bad) 14%, var(--panel)); color: var(--bad); }
+
 /* history */
 .hist summary { font-size: 16px; font-weight: 600; color: var(--fg); }
 .hlist { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
@@ -273,6 +278,7 @@ pre.diff { max-height: 50vh; }
       <button data-view="roles"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span data-i18n>Roles</span></button>
       <button data-view="flows"><svg viewBox="0 0 24 24"><path d="M4 7h13M13 3l4 4-4 4M20 17H7M11 13l-4 4 4 4"/></svg><span data-i18n>Flows</span></button>
       <button data-view="drift"><svg viewBox="0 0 24 24"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5h.01"/></svg><span data-i18n>Drift</span></button>
+      <button data-view="updates" hidden><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg><span data-i18n>Updates</span></button>
       <button data-view="new" hidden><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg><span data-i18n>New machine</span></button>
       <button data-view="settings" hidden><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span data-i18n>Settings</span></button>
     </nav>
@@ -333,6 +339,11 @@ pre.diff { max-height: 50vh; }
     <section class="view" data-view="drift" hidden>
       <p class="lead" id="drift-lead"></p>
       <div class="grid drift" id="drift-list"></div>
+    </section>
+
+    <section class="view" data-view="updates" hidden>
+      <p class="lead" id="updates-lead"></p>
+      <div class="grid drift" id="updates-list"></div>
     </section>
 
     <section class="view" data-view="new" hidden>
@@ -640,6 +651,33 @@ const FR = {
   "Clone depth: commits kept, as far back as a machine's history goes": "Profondeur du clone : commits gardés, jusqu'où remonte l'historique d'une machine",
   "Unknown machine: {name}": "Machine inconnue : {name}",
   "git depth": "profondeur Git",
+  // updates
+  "Updates": "Mises à jour", "Merge by itself": "Fusion automatique", "Kept out of automerge": "Hors fusion automatique",
+  "Renovate pull requests": "Demandes de fusion Renovate",
+  "Which Renovate updates merge themselves once CI passes, and the pull requests waiting. Read from {file}; a change is a commit like any edit.":
+    "Quelles mises à jour Renovate se fusionnent seules une fois la CI verte, et les demandes de fusion en attente. Lu dans {file} ; un changement est un commit comme toute modification.",
+  "major": "majeure", "minor": "mineure", "patch": "correctif", "pin": "épinglage", "digest": "empreinte", "pinDigest": "épinglage d'empreinte",
+  "Update types that merge by themselves, once the required checks pass (Forgejo/Gitea: merge when checks succeed):":
+    "Types de mise à jour qui se fusionnent seuls, une fois les vérifications obligatoires passées (Forgejo/Gitea : fusion quand les vérifications réussissent) :",
+  "Also only for: {match}": "Seulement pour : {match}", "Nothing merges by itself.": "Rien ne se fusionne seul.",
+  "The Renovate config turns automerge on for everything (top-level automerge): this rule changes nothing.":
+    "La configuration Renovate active la fusion automatique pour tout (automerge à la racine) : cette règle ne change rien.",
+  "Rules with automerge off, after the one above: they win over it.": "Règles qui coupent la fusion automatique, après celle du dessus : elles l'emportent.",
+  "Placed before the automerge rule: overridden by it. Move it after, in the file.": "Placée avant la règle de fusion automatique : sans effet. Déplacez-la après, dans le fichier.",
+  "Written by hand in the file": "Écrite à la main dans le fichier", "Allow automerge again": "Réautoriser",
+  "Dependency (as Renovate names it)": "Dépendance (nom Renovate)", "Why it stays manual": "Pourquoi elle reste manuelle", "Keep out": "Exclure",
+  "None.": "Aucune.", "No open Renovate pull request.": "Aucune demande de fusion Renovate ouverte.",
+  "Pull requests are not read: set forge_api, forge_repo and forge_token_file in the server's configuration.":
+    "Demandes de fusion non lues : réglez forge_api, forge_repo et forge_token_file dans la configuration du serveur.",
+  "The Git server's API did not answer: {err}": "L'API du serveur Git n'a pas répondu : {err}",
+  "Pull request": "Demande", "Change": "Changement", "Automerge": "Fusion auto", "Opened": "Ouverte",
+  "yes": "oui", "no": "non", "success": "verte", "pending": "en cours", "failure": "en échec", "error": "en erreur", "none": "aucune",
+  "As Renovate wrote it in the pull request at its last run.": "Tel que Renovate l'a écrit dans la demande à son dernier passage.",
+  "No Renovate config in the repository (Settings: renovate_file)": "Pas de configuration Renovate dans le dépôt (Réglages : renovate_file)",
+  "{file} is not in the repository": "{file} n'est pas dans le dépôt",
+  "A reason is required (200 characters at most) to keep a dependency out of automerge": "Une raison est obligatoire (200 caractères au plus) pour exclure une dépendance de la fusion automatique",
+  "update types": "types de mise à jour", "dependency": "dépendance",
+  "Renovate config in the repository (JSON; empty: no Updates view)": "Configuration Renovate dans le dépôt (JSON ; vide : pas de vue Mises à jour)",
 };
 const DICT = {fr: FR};
 const LANGS = {en: {name: "English", locale: "en-GB"}, fr: {name: "Français", locale: "fr-FR"}};
@@ -741,7 +779,7 @@ addEventListener("keydown", e => {
 });
 
 // ---------- export: the same JSON as cairn-iac.py --json, from the data already in the page ----------
-const EXPORT = ["title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows"];
+const EXPORT = ["title", "rev", "machines", "capacity", "firewalls", "roles", "playbooks", "groups", "findings", "flows", "updates"];
 $("#dl").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(Object.fromEntries(EXPORT.map(k => [k, D[k]])), null, 2) + "\n"], {type: "application/json"}));
@@ -1007,6 +1045,7 @@ const FORM = [
     ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
   ["Drift", [["repo_settings", "Settings file in the repository (JSON, empty: these settings only): its accepted findings, vCPU ratio, node capacity and required roles win over the settings here, and CI reads them too. With it, accepting a finding is a commit."],
     ["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
+  ["Updates", [["renovate_file", "Renovate config in the repository (JSON; empty: no Updates view)"]]],
   ["Node capacity", [["vcpu_ratio", "vCPU per declared core (CPU time is shared: 4 = up to 4 vCPU per core; memory and disk stay 1 for 1)", "num"], ["node_capacity", "What each node can give its guests; empty: the map shows the sums only. A node over its capacity is a drift warning.", "cap"]]],
   ["Path of a change", [["workflow.example", "Machine shown first"], ["workflow.workstation", "Workstation"], ["workflow.tofu", "Tofu command"],
     ["workflow.reviewer", "Who applies the plan"], ["workflow.git_server", "Git server"], ["workflow.controller", "Ansible controller"],
@@ -1033,7 +1072,7 @@ function renderSettings() {
     }
     if (type === "num") return `<label class="wide">${esc(label)}<input type="number" min="1" max="64" step="0.5" id="${id}" data-p="${p}" data-t="num" value="${esc(v ?? 1)}" style="max-width:120px"></label>`;
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
-    return `<label${/url|text|generic|required|repo_settings/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$|repo_settings/.test(p) ? ' class="mono"' : ""}></label>`;
+    return `<label${/url|text|generic|required|repo_settings|renovate_file/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$|repo_settings|renovate_file/.test(p) ? ' class="mono"' : ""}></label>`;
   };
   // keys the repository's settings file sets win over the fields here: say so under their card
   const RS = D.repo_settings, fixed = fs => RS ? fs.map(f => f[0]).filter(p => RS.keys.includes(p)) : [];
@@ -1155,8 +1194,60 @@ function renderFlows() {
 $("#flowfilter").addEventListener("change", e => { location.hash = e.target.value ? "flows/" + e.target.value : "flows"; });
 $("#flowcommon").addEventListener("change", renderFlows);
 
-// ---------- views and address (#overview, #machines, #roles, #flows, #flows/<machine>, #drift, #<machine>) ----------
-const VIEWS = ["overview", "machines", "roles", "flows", "drift", ...(EDIT ? ["new", "settings"] : [])];
+// ---------- updates: the Renovate automerge policy (renovate_file) and, on a server, the open Renovate pull requests ----------
+const U = D.updates && !D.updates.missing ? D.updates : null;
+const UTYPES = ["major", "minor", "patch", "pin", "digest", "pinDigest"];
+const matchText = m => Object.entries(m || {}).map(([k, v]) => `${k} ${Array.isArray(v) ? v.join(", ") : JSON.stringify(v)}`).join(" · ");
+const ciPill = s => `<span class="pill${s === "success" ? " ok" : s === "failure" || s === "error" ? " bad" : ""}">${esc(t(s))}</span>`;
+let prState = null;
+function renderUpdates() {
+  $("#updates-lead").textContent = t("Which Renovate updates merge themselves once CI passes, and the pull requests waiting. Read from {file}; a change is a commit like any edit.", {file: U.file});
+  const r = U.rule, dis = EDIT ? "" : " disabled";
+  const policy = `<article class="card"><h3>${t("Merge by itself")}</h3>${U.error ? `<p class="err">${esc(U.error)}</p>` : ""}
+    <p class="sub">${esc(t("Update types that merge by themselves, once the required checks pass (Forgejo/Gitea: merge when checks succeed):"))}</p>
+    <form id="am-form"><div class="types">${UTYPES.map(x => `<label class="check"><input type="checkbox" name="${x}"${U.types.includes(x) ? " checked" : ""}${dis}> ${esc(t(x))} <span class="label mono">${x}</span></label>`).join("")}</div>
+    ${r && matchText(r.match) ? `<p class="sub">${esc(t("Also only for: {match}", {match: matchText(r.match)}))}</p>` : ""}
+    ${U.global ? `<p class="err">${esc(t("The Renovate config turns automerge on for everything (top-level automerge): this rule changes nothing."))}</p>` : ""}
+    ${U.types.length ? "" : `<p class="sub">${t("Nothing merges by itself.")}</p>`}
+    ${EDIT ? `<div class="row"><button class="primary">${t("Save")}</button></div>` : ""}</form></article>`;
+  const ex = `<article class="card"><h3>${t("Kept out of automerge")}</h3><p class="sub">${esc(t("Rules with automerge off, after the one above: they win over it."))}</p>
+    <ul class="findings">${U.excluded.map(x => `<li><span class="mono">${esc(matchText(x.match))}</span><span class="why">${esc(x.description || "")}${x.managed ? "" : ` · ${esc(t("Written by hand in the file"))}`}</span>
+      ${x.shadowed ? `<span class="err">${esc(t("Placed before the automerge rule: overridden by it. Move it after, in the file."))}</span>` : ""}
+      ${EDIT && x.managed ? `<div class="chips"><button class="small ghost" data-allow="${esc((x.match.matchDepNames || [])[0] || "")}">${t("Allow automerge again")}</button></div>` : ""}</li>`).join("") || `<li><span class="sub">${t("None.")}</span></li>`}</ul>
+    ${EDIT ? `<form class="form" id="ex-form"><label>${t("Dependency (as Renovate names it)")}<input name="dep" class="mono" required maxlength="200"></label><label>${t("Why it stays manual")}<input name="reason" required maxlength="200"></label><div class="row wide"><button class="primary">${t("Keep out")}</button></div></form>` : ""}</article>`;
+  $("#updates-list").innerHTML = policy + ex + (S ? `<article class="card" id="prs">${prCard()}</article>` : "");
+}
+function prCard() {
+  const p = prState, h = `<h3>${t("Renovate pull requests")}</h3>`;
+  if (!p) return h + `<p class="sub">${t("Loading…")}</p>`;
+  if (p.off) return h + `<p class="sub">${esc(t("Pull requests are not read: set forge_api, forge_repo and forge_token_file in the server's configuration."))}</p>`;
+  if (p.error) return h + `<p class="err">${esc(t("The Git server's API did not answer: {err}", {err: p.error}))}</p>`;
+  if (!p.prs.length) return h + `<p class="empty">${t("No open Renovate pull request.")}</p>`;
+  return h + `<div class="table-wrap"><table><thead><tr><th>${t("Pull request")}</th><th>${t("Change")}</th><th>CI</th><th title="${esc(t("As Renovate wrote it in the pull request at its last run."))}">${t("Automerge")}</th><th>${t("Opened")}</th></tr></thead><tbody>${p.prs.map(x =>
+    `<tr><td class="wrap"><a href="${esc(x.url)}" target="_blank" rel="noopener">#${esc(x.number)}</a> ${esc(x.title)}</td>
+     <td class="wrap" data-label="${t("Change")}">${x.updates.map(u => `<div><span class="pill">${esc(t(u.type))}</span> <span class="mono">${esc(u.dep)}</span> <span class="label mono">${esc(u.change)}</span></div>`).join("")}</td>
+     <td data-label="CI">${ciPill(x.ci)}</td><td data-label="${t("Automerge")}">${x.automerge == null ? "" : esc(t(x.automerge ? "yes" : "no"))}</td>
+     <td class="num" data-label="${t("Opened")}">${esc((x.created || "").slice(0, 10))}</td></tr>`).join("")}</tbody></table></div>`;
+}
+async function loadPrs() {
+  if (!S || prState) return;
+  try { const r = await fetch("/api/updates"); prState = r.ok ? await r.json() : {error: String(r.status), prs: []}; }
+  catch (e) { prState = {error: String(e), prs: []}; }
+  const c = $("#prs"); if (c) c.innerHTML = prCard();
+}
+if (U) { document.querySelector('#nav [data-view="updates"]').hidden = false; renderUpdates(); }
+$("#updates-list").addEventListener("submit", e => {
+  e.preventDefault();
+  const f = e.target;
+  if (f.id === "am-form") preview({op: "automerge", types: [...f.querySelectorAll("input:checked")].map(i => i.name)}, f);
+  if (f.id === "ex-form") preview({op: "automerge_exclude", dep: f.dep.value.trim(), reason: f.reason.value.trim()}, f);
+});
+$("#updates-list").addEventListener("click", e => {
+  const b = e.target.closest("[data-allow]"); if (b) preview({op: "automerge_exclude", dep: b.dataset.allow, reason: null}, b.closest("li"));
+});
+
+// ---------- views and address (#overview, #machines, #roles, #flows, #flows/<machine>, #drift, #updates, #<machine>) ----------
+const VIEWS = ["overview", "machines", "roles", "flows", "drift", ...(U ? ["updates"] : []), ...(EDIT ? ["new", "settings"] : [])];
 if (EDIT) {
   document.querySelector('#nav [data-view="settings"]').hidden = false;
   document.querySelector('#nav [data-view="new"]').hidden = false;
@@ -1180,6 +1271,7 @@ function route() {
   if (M[h]) { selectHost(h); show("machines"); return; }
   if (EDIT && (h === "new" || h.startsWith("new/"))) renderNew(M[h.slice(4)] ? h.slice(4) : current);
   if (h === "flows" || h.startsWith("flows/")) { $("#flowfilter").value = M[h.slice(6)] || flowKeys.includes(h.slice(6)) ? h.slice(6) : ""; renderFlows(); }
+  if (h === "updates") loadPrs();
   show(VIEWS.includes(h.split("/")[0]) ? h.split("/")[0] : "overview");
 }
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) location.hash = b.dataset.view; });

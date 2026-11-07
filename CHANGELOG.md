@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0 (2026-11-07)
+
+- Updates view: which Renovate update types merge by themselves, from the
+  repository's Renovate config (`renovate_file`); the server edits it like
+  any change (diff, commit, pull request): tick the types of the rule
+  `Cairn IaC: automerge` (`automerge` + `platformAutomerge`), keep a
+  dependency out with its reason, allow it again. Rules with automerge off
+  are listed, flagged when placed before the automerge rule.
+- With `forge_api`, `forge_repo`, `forge_token_file` (Forgejo/Gitea), the
+  open Renovate pull requests: updates, CI state, automerge as Renovate set
+  it.
+- Roles included by other roles (tasks, blocks, `meta` dependencies) now
+  count for the play's hosts: machine roles, required roles in Drift, the
+  JSON export.
+
 ## 1.4.0 (2026-11-07)
 
 - Settings that CI must share with the page live in the repository:

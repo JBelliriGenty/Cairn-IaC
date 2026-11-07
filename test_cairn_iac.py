@@ -566,5 +566,69 @@ module "firewall_proxy" {
         fmt = subprocess.run(["tofu", "fmt", "-check", "-diff", str(repo / "tofu")], capture_output=True, text=True)
         assert fmt.returncode == 0, fmt.stdout + fmt.stderr
 
+# ---- roles included by roles (tasks, blocks, meta dependencies) count for the play's hosts ----
+assert ci.role_refs([{"block": [{"include_role": {"name": "a"}}], "always": [{"ansible.builtin.import_role": {"name": "b"}}]}, "x"]) == ["a", "b"]
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp)
+    shutil.copytree(HERE / "example", repo, dirs_exist_ok=True)
+    (repo / "ansible/roles/web/meta").mkdir()
+    (repo / "ansible/roles/web/meta/main.yml").write_text("dependencies:\n  - role: tls\n", encoding="utf-8")
+    (repo / "ansible/roles/tls/tasks").mkdir(parents=True)
+    (repo / "ansible/roles/tls/tasks/main.yml").write_text("- name: Certificate\n  ansible.builtin.include_role:\n    name: base\n", encoding="utf-8")
+    *_, pbs, roles = ci.read_ansible(ci.load_config(repo / "cairn-iac.json"), repo)
+    assert roles["web"]["includes"] == ["tls"] and roles["tls"]["includes"] == ["base"], roles
+    web_play = next(p for p in pbs["site"] if "web" in p["roles"])
+    assert web_play["roles"].index("tls") > web_play["roles"].index("web") and web_play["roles"].count("base") == 1, web_play
+
+# ---- updates: the Renovate automerge policy, its edits, the pull requests ----
+u = data["updates"]
+assert u["file"] == "renovate.json" and u["types"] == ["patch", "digest"] and u["rule"]["match"] == {"matchManagers": ["custom.regex"]}, u
+assert u["excluded"] == [{"description": "Database: a patch can still migrate its files, merged by hand", "match": {"matchDepNames": ["postgres"]},
+                          "managed": False, "shadowed": False}], u
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp)
+    shutil.copytree(HERE / "example", repo, dirs_exist_ok=True)
+    cfg = ci.load_config(repo / "cairn-iac.json")
+
+    def run(op):
+        r = ci.apply(op, cfg, repo)
+        (rel, old, new), = r["files"]
+        (repo / rel).write_text(new, encoding="utf-8")
+        return r["message"]
+    pol = lambda: ci.renovate_policy(cfg, repo)
+    assert run({"op": "automerge", "types": ["digest", "minor", "patch"]}) == "renovate: automerge minor, patch, digest"
+    assert pol()["types"] == ["minor", "patch", "digest"] and pol()["rule"]["match"] == {"matchManagers": ["custom.regex"]}
+    assert run({"op": "automerge", "types": []}) == "renovate: automerge off" and pol()["types"] == [] and pol()["rule"]["on"] is False
+    assert "update types" in refused(ci.apply, {"op": "automerge", "types": ["all"]}, cfg, repo)
+    assert run({"op": "automerge_exclude", "dep": "nginx", "reason": "rolled back"}) == "renovate: no automerge for nginx (rolled back)"
+    ex = pol()["excluded"][-1]
+    assert ex == {"description": "rolled back", "match": {"matchDepNames": ["nginx"]}, "managed": True, "shadowed": False}, ex
+    rules = json.loads((repo / "renovate.json").read_text(encoding="utf-8"))["packageRules"]
+    assert rules[-1] == {"description": "Cairn IaC: no automerge: rolled back", "matchDepNames": ["nginx"], "automerge": False}
+    assert "reason is required" in refused(ci.apply, {"op": "automerge_exclude", "dep": "nginx", "reason": " "}, cfg, repo)
+    assert "dependency" in refused(ci.apply, {"op": "automerge_exclude", "dep": "-x", "reason": "r"}, cfg, repo)
+    assert run({"op": "automerge_exclude", "dep": "nginx", "reason": None}) == "renovate: automerge nginx again" and len(pol()["excluded"]) == 1
+    assert "Nothing changes" in refused(ci.apply, {"op": "automerge_exclude", "dep": "postgres", "reason": None}, cfg, repo)  # written by hand
+    # a new rule goes first, so that the exclusions after it win
+    (repo / "renovate.json").write_text('{"packageRules": [{"matchDepNames": ["redis"], "automerge": false}]}', encoding="utf-8")
+    assert run({"op": "automerge", "types": ["patch"]}) == "renovate: automerge patch"
+    assert pol()["excluded"][0]["shadowed"] is False and json.loads((repo / "renovate.json").read_text())["packageRules"][0]["description"] == ci.AUTOMERGE
+    (repo / "renovate.json").unlink()
+    assert pol()["missing"] and "not in the repository" in refused(ci.apply, {"op": "automerge", "types": ["patch"]}, cfg, repo)
+    assert ci.renovate_policy({**cfg, "renovate_file": ""}, repo) is None
+
+body = ("This PR contains the following updates:\n\n| Package | Update | Change | Pending |\n|---|---|---|---|\n"
+        "| [binwiederhier/ntfy](https://ntfy.sh/) ([source](https://github.com/x)) | minor | `v2.28.0` → `v2.37.2` | `v2.38.0` |\n"
+        "| louislam/uptime-kuma | digest | `70233f4` → `3d63290` | |\n\n---\n\n🚦 **Automerge**: Enabled.\n")
+assert ci.pr_updates(body) == [{"dep": "binwiederhier/ntfy", "type": "minor", "change": "v2.28.0 → v2.37.2"},
+                               {"dep": "louislam/uptime-kuma", "type": "digest", "change": "70233f4 → 3d63290"}]
+api = {"/repos/o/r/pulls?state=open&limit=50": [
+           {"number": 9, "title": "Update ntfy", "html_url": "u9", "created_at": "2026-11-02T05:00:00+01:00", "body": body,
+            "head": {"ref": "renovate/ntfy", "sha": "abc"}, "labels": [{"name": "renovate"}], "mergeable": True},
+           {"number": 3, "title": "Hand-made", "body": "fix", "head": {"ref": "feature", "sha": "def"}}],
+       "/repos/o/r/commits/abc/status": {"state": "success", "total_count": 1}}
+prs = ci.renovate_prs(api.__getitem__, "o/r")
+assert [(p["number"], p["automerge"], p["ci"], p["labels"]) for p in prs] == [(9, True, "success", ["renovate"])], prs
+
 assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
 print("ok")
