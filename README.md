@@ -218,6 +218,10 @@ merge by themselves (as written at its last run).
 
 ## Configuration (JSON)
 
+Every key with its type and default, `.cairn-iac.json`, the drift finding
+ids, the server's `settings.json` and short recipes:
+[docs/configuration.md](docs/configuration.md).
+
 Every key is optional; paths are relative to the config file.
 
 | Key | Purpose (default) |
@@ -369,6 +373,7 @@ Who may use it is set in the config file only, never from the page:
 | `require_groups` | at least one of these groups (empty: any signed-in user) |
 | `read_only` | page and Settings without editing (`false`) |
 | `summary_token_file` | file holding a token (32 characters min., `openssl rand -hex 32`) that opens `GET /api/summary` to dashboards with `Authorization: Bearer <token>`: `machines`, `firewalls`, `roles`, `warnings`, `notes` (drift), `rev`, `error` (empty: closed) |
+| `export_token_file` | file holding a token (32 characters min.) that opens `GET /api/export` with `Authorization: Bearer <token>`: the model `--json` prints, for read-only aggregators such as Cairn Map (empty: closed) |
 | `forge_api`, `forge_repo`, `forge_token_file` | Forgejo/Gitea API (`https://git.example/api/v1`), `owner/repo`, a file holding a token that reads it: open Renovate pull requests in the Updates view (empty: not listed) |
 | `forge_ca_file` | CA bundle for the API's certificate (empty: the system's) |
 | `ssh_key` | private key for the Git remote, e.g. one already allowed on the repository (`.pub` beside it); empty: generated in `data_dir` |

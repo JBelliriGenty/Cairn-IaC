@@ -61,6 +61,8 @@ SERVER = {
     "name_header": "Remote-Name", "email_header": "Remote-Email", "require_groups": [],
     # File holding a token (32 characters min.) that opens GET /api/summary to dashboards; empty: closed.
     "summary_token_file": "",
+    # Same for GET /api/export (the --json model) to read-only aggregators (Cairn Map); empty: closed.
+    "export_token_file": "",
     # Forgejo/Gitea API (https://host/api/v1), owner/repo and a read token file: the Updates view lists the open Renovate
     # pull requests with their CI state. ca_file: a CA bundle for the API's certificate (empty: the system's).
     "forge_api": "", "forge_repo": "", "forge_token_file": "", "forge_ca_file": "",
@@ -1488,6 +1490,9 @@ class App:
         self.token = (cfg["base"] / cfg["summary_token_file"]).read_text().strip() if cfg.get("summary_token_file") else ""
         if self.token and len(self.token) < 32:
             sys.exit("cairn-iac: summary_token_file: token shorter than 32 characters")
+        self.export_token = (cfg["base"] / cfg["export_token_file"]).read_text().strip() if cfg.get("export_token_file") else ""
+        if self.export_token and len(self.export_token) < 32:
+            sys.exit("cairn-iac: export_token_file: token shorter than 32 characters")
 
     def settings(self):
         s = json.loads(self.settings_file.read_text(encoding="utf-8"))
@@ -1588,6 +1593,15 @@ class App:
         return {"machines": len(data["machines"]), "firewalls": len(data["firewalls"]), "roles": len(data["roles"]),
                 "warnings": warn, "notes": len(data["findings"]) - warn, "rev": rev[:7],
                 "error": data.get("error", "") or self.sync_error}
+
+    def export(self):
+        """The model as --json prints it, for read-only aggregators."""
+        with self.lock:
+            s = self.settings()
+            self.sync(s)
+            repo = self.repo(s)
+            data = self.model(s, repo, self.head(repo))[1]
+        return {k: data.get(k) for k in EXPORT}
 
     def updates(self):
         """Open Renovate pull requests from the Git server's API, kept 60 s; {off: True} when no API is set."""
@@ -1780,6 +1794,8 @@ def serve(cfg):
                 return self.send(200, favicon(), "image/png")
             if self.path == "/api/summary" and app.token and hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {app.token}"):
                 return self.send(200, app.summary())
+            if self.path == "/api/export" and app.export_token and hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {app.export_token}"):
+                return self.send(200, app.export())
             user = app.user(self)
             if not user:
                 return self.send(403, "access denied\n", "text/plain")

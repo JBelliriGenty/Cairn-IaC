@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 (2026-11-07)
+
+- `export_token_file`: a bearer token that opens `GET /api/export`, the model
+  `--json` prints, to read-only aggregators such as Cairn Map.
+
 ## 1.5.0 (2026-11-07)
 
 - Updates view: which Renovate update types merge by themselves, from the
