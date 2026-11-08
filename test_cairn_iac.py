@@ -631,4 +631,9 @@ prs = ci.renovate_prs(api.__getitem__, "o/r")
 assert [(p["number"], p["automerge"], p["ci"], p["labels"]) for p in prs] == [(9, True, "success", ["renovate"])], prs
 
 assert ci.favicon().startswith(b"\x89PNG")  # served at /favicon.ico
+
+# every key the code reads is in the configuration reference
+doc = (HERE / "docs/configuration.md").read_text(encoding="utf-8")
+missing = [k for k in [*ci.DEFAULTS, *ci.SERVER, *ci.DEFAULTS["git"]] if f"`{k}`" not in doc]
+assert not missing, missing
 print("ok")
