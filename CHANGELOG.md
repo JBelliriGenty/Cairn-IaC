@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.0 (2026-11-10)
+
+- What each machine is for: its Tofu `description`, else a `description`
+  host variable in the inventory, shown on the machine card, as the tile's
+  tooltip, in the search and in the JSON export.
+- `require_description`: a host with neither is a drift warning
+  (`no_description`); one whose two descriptions differ too
+  (`description_mismatch`).
+- `host_table`: a Markdown file (a README, a CLAUDE.md) whose table must
+  list every inventory host (`not_in_host_table`).
+- Both can live in the repository's settings file, so CI checks them.
+
 ## 1.6.0 (2026-11-07)
 
 - `export_token_file`: a bearer token that opens `GET /api/export`, the model

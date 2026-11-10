@@ -50,6 +50,8 @@ Every key is optional.
 | `bare_metal_group` | string | `"bare_metal"` | inventory group of physical machines outside the cluster |
 | `generic_playbooks` | list | `[]` | playbook names (no `.yml`) never shown as a machine's main playbook, such as fleet-wide upgrades |
 | `required_roles` | list | `[]` | roles every inventory host must get; a host missing one is a drift warning |
+| `require_description` | bool | `false` | every inventory host must say what it is for: its Tofu `description`, or a `description` host variable in the inventory (Tofu's wins on the page) |
+| `host_table` | path | `""` | a Markdown file whose table lists the hosts (a README, a CLAUDE.md): an inventory host whose name is in none of its table rows (`\|` lines, case-insensitive) is a drift warning; empty: not checked |
 | `node_capacity` | object | `{}` | see [`node_capacity`](#node_capacity) |
 | `vcpu_ratio` | number | `1` | vCPU a node may give per declared core, between 1 and 64 (a bad value counts as 1) |
 | `accepted_findings` | object | `{}` | finding id → reason, see [Drift findings](#drift-findings) |
@@ -180,8 +182,10 @@ Its keys win over `config.json` and over the server's settings, so
 | `vcpu_ratio` | number |
 | `node_capacity` | object of objects |
 | `required_roles` | list of strings |
+| `require_description` | bool |
+| `host_table` | string |
 
-Only these four keys are read; any other is ignored. A key of the wrong
+Only these six keys are read; any other is ignored. A key of the wrong
 type is left out (the setting from the config stays) and the file shows as
 a `repo_settings:.cairn-iac.json` warning; so does a file that is not a
 JSON object. A missing file is fine. A path that leaves the repository
@@ -202,6 +206,9 @@ greyed, and `--check` no longer fails on it.
 | `not_in_inventory:<machine>` | warn | a Tofu machine absent from the inventory |
 | `ip_mismatch:<machine>` | warn | Tofu and `ansible_host` disagree |
 | `required_roles:<machine>` | warn | a host missing one of `required_roles` |
+| `no_description:<machine>` | warn | with `require_description`, a host with neither a Tofu nor an inventory description |
+| `description_mismatch:<machine>` | warn | the inventory `description` differs from the Tofu one |
+| `not_in_host_table:<machine>` | warn | a host missing from the table rows of `host_table` |
 | `firewall_orphan:<machine>` | warn | a firewall whose id matches no machine |
 | `firewall_off:<machine>` | warn | a guest firewall turned off that has rules |
 | `over_allocated:<node>:<cores\|memory\|disk>` | warn | a node given more than its `node_capacity` |

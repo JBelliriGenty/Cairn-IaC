@@ -106,7 +106,7 @@ assert [x["msg"].format(**x["vars"]) for x in f] == ["N gives its guests 1.07 TB
 
 # ---- machines merged from Tofu, the firewalls and the inventory ----
 mm = {m["key"]: m for m in data["machines"]}
-assert mm["web"] == {"key": "web", "name": "web", "host": "web", "node": "pve1", "id": 201, "ip": "10.0.0.21",
+assert mm["web"] == {"key": "web", "name": "web", "host": "web", "node": "pve1", "id": 201, "ip": "10.0.0.21", "description": "",
                      "tofu": {"kind": "LXC", "address": "proxmox_virtual_environment_container.web", "cores": "2", "memory": "2048",
                               "disk": "16", "file": "tofu/main.tf", "line": 2},
                      "firewall": "201", "phys": False, "groups": ["guests"], "roles": ["base", "web"], "playbooks": ["site"]}, mm["web"]
@@ -184,6 +184,25 @@ module "fw_b" {
         ("b", "a", False), ("a", "obs", True), (None, "a", True), ("b", "obs", True), ("obs", "b", True)], fl2
     half = list(ci.half_open(fl2, fws, ms, {}))
     assert [(f["src"]["k"], f["dst"]["k"], f["dport"]) for f in half] == [("b", "a", "80")], half
+
+# ---- what each machine is for: Tofu description, inventory host variable, host table ----
+with tempfile.TemporaryDirectory() as tmp:
+    repo = pathlib.Path(tmp) / "repo"
+    shutil.copytree(HERE / "example", repo)
+    tf = repo / "tofu/main.tf"
+    tf.write_text(tf.read_text(encoding="utf-8").replace('  name      = "db"\n', '  name      = "db"\n  description = "Database"\n', 1), encoding="utf-8")
+    inv = repo / "ansible/inventory/hosts.yml"
+    inv.write_text(inv.read_text(encoding="utf-8").replace("ansible_host: 10.0.0.40", "ansible_host: 10.0.0.40\n          description: Office printer")
+                   .replace("ansible_host: 10.0.0.32", "ansible_host: 10.0.0.32\n          description: Postgres"), encoding="utf-8")
+    (repo / "HOSTS.md").write_text("| Name | Role |\n|---|---|\n| WEB | front |\n| db | data |\n\npve1 is mentioned outside the table\n", encoding="utf-8")
+    c = ci.load_config(repo / "cairn-iac.json")
+    d = ci.collect({**c, "require_description": True, "host_table": "HOSTS.md"}, (c["base"] / c["repo"]).resolve())
+    desc = {m["key"]: m["description"] for m in d["machines"]}
+    assert (desc["db"], desc["printer"], desc["web"]) == ("Database", "Office printer", ""), desc  # Tofu first
+    got = {(f["kind"], f["machine"]) for f in d["findings"] if f["kind"] in ("no_description", "description_mismatch", "not_in_host_table")}
+    assert got == {("no_description", "web"), ("no_description", "pve1"), ("no_description", "pve2"), ("description_mismatch", "db"),
+                   ("not_in_host_table", "pve1"), ("not_in_host_table", "pve2"), ("not_in_host_table", "printer")}, got
+    assert not {f["kind"] for f in ci.collect(c, (c["base"] / c["repo"]).resolve())["findings"]} & {"no_description", "not_in_host_table"}
 
 # ---- a Tofu state or saved plan is never read (they can hold secrets) ----
 with tempfile.TemporaryDirectory() as tmp:

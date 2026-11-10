@@ -38,6 +38,11 @@ DEFAULTS = {
     # A JSON file in the repository whose REPO_KEYS win over these settings, so CI (--check) and the page read the
     # same values; with it, accepting a finding is a commit (pull request) like any edit. Empty: settings only.
     "repo_settings": ".cairn-iac.json",
+    # A repo-relative Markdown file whose table lists the hosts (a README, a CLAUDE.md): an inventory host missing
+    # from its table rows is a drift finding. Empty: not checked.
+    "host_table": "",
+    # Every inventory machine must say what it is for: its Tofu description, or a `description` host variable.
+    "require_description": False,
     # The repository's Renovate config: the Updates view shows and edits which update types merge themselves. Empty: no view.
     "renovate_file": "renovate.json",
     "workflow": {},
@@ -183,7 +188,7 @@ def read_tofu(tofu_dir, repo):
                     "cores": val(body, "cores"), "memory": val(body, "memory") or val(body, "dedicated"),
                     "disk": val(body, "disk_size") or val(body, "size"),
                     "ip": ((val(body, "ip_address") or val(body, "address") or "").split("/")[0]),
-                    "file": rel, "line": line, "code": body,
+                    "description": val(body, "description") or "", "file": rel, "line": line, "code": body,
                 })
     for cid, o in options.items():
         if cid in firewalls:
@@ -215,6 +220,27 @@ def read_inventory(text):
     for h, v in ((inv.get("all") or {}).get("hosts") or {}).items():
         ips.setdefault(h, (v or {}).get("ansible_host", ""))
     return groups, direct, ips
+
+
+def read_descriptions(text):
+    """{host: its `description` host variable} from the inventory, what the machine is for."""
+    out = {}
+
+    def walk(d):
+        d = d or {}
+        for h, v in (d.get("hosts") or {}).items():
+            if isinstance(v, dict) and str(v.get("description") or "").strip():
+                out[h] = str(v["description"]).strip()
+        for cd in (d.get("children") or {}).values():
+            walk(cd)
+
+    walk((yaml.safe_load(text) or {}).get("all") or {})
+    return out
+
+
+def table_hosts(text):
+    """Words of the Markdown table rows of a file, lower-cased: the names a host table lists."""
+    return {w.lower() for l in text.splitlines() if l.lstrip().startswith("|") for w in re.findall(r"[A-Za-z0-9_.-]+", l)}
 
 
 def read_ansible(cfg, repo):
@@ -399,7 +425,7 @@ def half_open(fl, firewalls, machines, ips):
             yield f
 
 
-def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap=None):
+def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap=None, descs=None, listed=None):
     """Inconsistencies between Tofu, the firewalls, the inventory and the playbooks. Each finding:
     {kind, severity (warn|info), machine (page key), file, line, msg (English template), vars}."""
     inv_lines = inv_text.splitlines()
@@ -432,6 +458,16 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
             add("not_in_tofu", "info", k, cfg["inventory"], inv_line(h), "{name} is in the inventory but no Tofu block creates it", name=h)
         if k not in got:
             add("no_playbook", "info", k, cfg["inventory"], inv_line(h), "{name} is in the inventory but no playbook targets it", name=h)
+        t = tofu.get(k, {}).get("description")
+        if cfg.get("require_description") and not (t or (descs or {}).get(h)):
+            add("no_description", "warn", k, cfg["inventory"], inv_line(h),
+                "{name} has no description: say what it is for (Tofu description, or a description host variable)", name=h)
+        elif t and descs and descs.get(h) and descs[h] != t:
+            add("description_mismatch", "warn", k, cfg["inventory"], inv_line(h),
+                "{name}: the inventory description differs from Tofu's; keep one", name=h)
+        if listed is not None and h.lower() not in listed and k not in listed:
+            add("not_in_host_table", "warn", k, cfg["inventory"], inv_line(h), "{name} is missing from the host table of {table}",
+                name=h, table=cfg["host_table"])
         missing = [r for r in cfg.get("required_roles") or [] if r not in got.get(k, ())]
         if missing:
             add("required_roles", "warn", k, cfg["inventory"], inv_line(h), "{name} does not get the required roles: {roles}",
@@ -478,7 +514,7 @@ def num(v):
     return int(m.group(1)) if m else None
 
 
-REPO_KEYS = ("accepted_findings", "vcpu_ratio", "node_capacity", "required_roles")
+REPO_KEYS = ("accepted_findings", "vcpu_ratio", "node_capacity", "required_roles", "host_table", "require_description")
 FINDING_ID = re.compile(r"[a-z_]+:[^\s]{1,200}")
 
 
@@ -500,7 +536,8 @@ def repo_settings(cfg, repo):
     ok = {"accepted_findings": lambda v: isinstance(v, dict) and all(isinstance(i, str) and isinstance(r, str) for i, r in v.items()),
           "vcpu_ratio": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
           "node_capacity": lambda v: isinstance(v, dict) and all(isinstance(c, dict) for c in v.values()),
-          "required_roles": lambda v: isinstance(v, list) and all(isinstance(r, str) for r in v)}
+          "required_roles": lambda v: isinstance(v, list) and all(isinstance(r, str) for r in v),
+          "host_table": lambda v: isinstance(v, str), "require_description": lambda v: isinstance(v, bool)}
     bad = [k for k in REPO_KEYS if k in raw and not ok[k](raw[k])]
     return {k: raw[k] for k in REPO_KEYS if k in raw and k not in bad}, rel, f"{rel}: wrong type for {', '.join(bad)}" if bad else ""
 
@@ -683,12 +720,12 @@ def capacity(machines, declared, ratio=1):
 def merge(data):
     """One entry per machine, merged from Tofu, the firewalls and the inventory, as the page shows them."""
     hosts = {key(h): ip for h, ip in data["ips"].items()}
-    new = lambda k, name: {"key": k, "name": name, "host": None, "node": None, "id": None, "ip": "", "tofu": None, "firewall": None}
+    new = lambda k, name: {"key": k, "name": name, "host": None, "node": None, "id": None, "ip": "", "description": "", "tofu": None, "firewall": None}
     M = {}
     for m in data["tofu"]:
         k = key(m["name"])
         M[k] = {**new(k, m["name"]), "node": m["node"] and key(m["node"]), "id": m["id"], "ip": m["ip"] or hosts.get(k) or "",
-                "tofu": {f: m[f] for f in ("kind", "address", "cores", "memory", "disk", "file", "line")}}
+                "description": m["description"], "tofu": {f: m[f] for f in ("kind", "address", "cores", "memory", "disk", "file", "line")}}
     by_id = {str(x["id"]): x for x in M.values() if x["id"] is not None}
     for cid, fw in data["firewalls"].items():
         k = key(fw["name"])
@@ -699,6 +736,7 @@ def merge(data):
     for h, ip in data["ips"].items():
         x = M.setdefault(key(h), new(key(h), h))
         x["ip"], x["host"] = x["ip"] or ip, h
+        x["description"] = x["description"] or data.get("descriptions", {}).get(h, "")
     roles, pbs, groups = {}, {}, {}
     for pb, plays in data["playbooks"].items():
         for p in plays:
@@ -725,7 +763,11 @@ def collect(cfg, repo):
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
     cap = capacity(machines, cfg.get("node_capacity"), ratio(cfg.get("vcpu_ratio")))
-    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, (repo / cfg["inventory"]).read_text(encoding="utf-8"), fl, cap)
+    inv_text = (repo / cfg["inventory"]).read_text(encoding="utf-8")
+    descs = read_descriptions(inv_text)
+    ht = repo_rel(cfg.get("host_table"))
+    listed = table_hosts((repo / ht).read_text(encoding="utf-8")) if ht and (repo / ht).is_file() else None
+    findings = drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl, cap, descs, listed)
     inv_parent = (repo / cfg["inventory"]).parent.parent
     try:
         pb_prefix = (repo / cfg["playbooks"]).relative_to(inv_parent).as_posix() + "/"
@@ -737,7 +779,7 @@ def collect(cfg, repo):
         "generic_playbooks": cfg["generic_playbooks"], "links": cfg["links"],
         "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
         "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
-        "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips,
+        "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips, "descriptions": descs,
         "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "capacity": cap, "server": None,
         "repo_settings": {"file": rs_file, "keys": sorted(over), "error": rs_error} if rs_file else None,
         "updates": renovate_policy(cfg, repo),
@@ -752,7 +794,7 @@ def collect(cfg, repo):
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None, "updates": None}
+            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "descriptions": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None, "updates": None}
 
 
 def favicon():

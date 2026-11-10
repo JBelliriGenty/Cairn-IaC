@@ -138,6 +138,9 @@ The Drift view (with a count in the menu and on the overview) and
 - a guest firewall turned off (`enabled = false`) that has rules: they
   protect nothing;
 - an inventory host missing one of the `required_roles`;
+- with `require_description`, a host that does not say what it is for (Tofu `description` or a
+  `description` host variable), or whose two descriptions differ;
+- with `host_table`, a host missing from the host table of a Markdown file (a README, a CLAUDE.md);
 - a node given more vCPU, memory or disk than its `node_capacity` (vCPU × `vcpu_ratio`).
 
 A finding known and kept on purpose can be **accepted** with a reason (server: the Accept button; else
@@ -236,6 +239,8 @@ Every key is optional; paths are relative to the config file.
 | `bare_metal_group` | inventory group of physical machines outside the cluster (`bare_metal`) |
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
+| `require_description` | every inventory machine must say what it is for: Tofu `description` or a `description` host variable (`false`) |
+| `host_table` | a Markdown file whose table must list every inventory host (empty: not checked) |
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `vcpu_ratio` | vCPU a node may give per declared core, CPU time being shared (`1`; e.g. `4`) |
 | `accepted_findings` | `{finding id: reason}`: drift findings kept on purpose, still listed but not counted, `--check` passes on them (empty) |
