@@ -90,6 +90,22 @@ with tempfile.TemporaryDirectory() as t3:
     assert d3["repo_settings"] == {"file": ".cairn-iac.json", "keys": [], "error": ""} and ci.collect({**cfg3, "repo_settings": ""}, repo3)["repo_settings"] is None
     assert ci.repo_settings({"repo_settings": "../x.json"}, repo3) == ({}, None, "")
 
+# ---- guest_nodes_file: where the guests run now wins over Tofu's node_name (HA, migrations) ----
+with tempfile.TemporaryDirectory() as tmp:
+    gn = pathlib.Path(tmp) / "guests.json"
+    cfgn = {**ci.load_config(HERE / "example/cairn-iac.json"), "guest_nodes_file": str(gn)}
+    repon = (cfgn["base"] / cfgn["repo"]).resolve()
+    node_of = lambda: {m["name"]: m["node"] for m in ci.collect(cfgn, repon)["machines"] if m["id"]}
+    assert node_of()["web"] == "pve1"  # no file: the declared node
+    gn.write_text(json.dumps([{"vmid": 201, "node": "pve2", "type": "lxc"}, {"vmid": 999, "node": "pve9"}, {"vmid": 202, "node": "bad name"}]))
+    dn = ci.collect(cfgn, repon)
+    assert node_of()["web"] == "pve2" and node_of()["db"] == "pve2" and dn["firewalls"]["201"]["node"] == "pve2"
+    assert dn["capacity"]["pve2"]["guests"] == 3 and "pve1" not in {k for k, c in dn["capacity"].items() if c["guests"]}
+    gn.write_text('{"201": "pve2"}')  # the plain form
+    assert node_of()["web"] == "pve2"
+    gn.write_text("not json")
+    assert node_of()["web"] == "pve1"
+
 # ---- node capacity: sums of what Tofu gives each node's guests, against the declared totals ----
 cap = data["capacity"]
 assert {n: (c["guests"], c["cores"], c["memory"], c["disk"], c["total"]) for n, c in cap.items()} == {

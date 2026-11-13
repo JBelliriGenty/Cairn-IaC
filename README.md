@@ -380,6 +380,7 @@ Who may use it is set in the config file only, never from the page:
 | `summary_token_file` | file holding a token (32 characters min., `openssl rand -hex 32`) that opens `GET /api/summary` to dashboards with `Authorization: Bearer <token>`: `machines`, `firewalls`, `roles`, `warnings`, `notes` (drift), `rev`, `error` (empty: closed) |
 | `export_token_file` | file holding a token (32 characters min.) that opens `GET /api/export` with `Authorization: Bearer <token>`: the model `--json` prints, for read-only aggregators such as Cairn Map (empty: closed) |
 | `forge_api`, `forge_repo`, `forge_token_file` | Forgejo/Gitea API (`https://git.example/api/v1`), `owner/repo`, a file holding a token that reads it: open Renovate pull requests in the Updates view (empty: not listed) |
+| `guest_nodes_file` | JSON file saying where each guest runs now (`pvesh get /cluster/resources --type vm --output-format json`, or `{"201": "pve2"}`), refreshed by a timer of yours: it wins over Tofu's `node_name`, which HA and migrations leave behind (empty: the declared nodes) |
 | `forge_ca_file` | CA bundle for the API's certificate (empty: the system's) |
 | `ssh_key` | private key for the Git remote, e.g. one already allowed on the repository (`.pub` beside it); empty: generated in `data_dir` |
 | `firewall_lists` | `{in, out}`: list names that receive new rules in a firewall module (`inbound_rules`, `outbound_rules`) |

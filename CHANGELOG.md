@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0 (2026-11-13)
+
+- `guest_nodes_file`: a JSON file saying where each guest runs now
+  (Proxmox's own `pvesh get /cluster/resources --type vm --output-format json`,
+  or `{guest id: node}`), kept fresh by a timer of yours. It wins over Tofu's
+  `node_name`, which HA failovers and migrations leave behind: the map, the
+  node capacity and its drift warning follow the guests. Without it, nothing
+  changes.
+
 ## 1.7.0 (2026-11-10)
 
 - What each machine is for: its Tofu `description`, else a `description`

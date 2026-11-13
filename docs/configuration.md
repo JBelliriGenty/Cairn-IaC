@@ -154,6 +154,7 @@ Read from `config.json` only, never from the page.
 | `ssh_key` | path | `""` | private key for the remote (its `.pub` beside it); empty: one is made in `data_dir` |
 | `summary_token_file` | path | `""` | opens `GET /api/summary` to dashboards; empty: closed |
 | `export_token_file` | path | `""` | opens `GET /api/export` (the `--json` model) to read-only aggregators such as Cairn Map; empty: closed |
+| `guest_nodes_file` | path | `""` | JSON saying where each guest runs now: the output of `pvesh get /cluster/resources --type vm --output-format json`, or `{"201": "pve2"}`; wins over Tofu's `node_name` (HA, migrations); you keep it fresh (a timer); empty or unreadable: the declared nodes |
 | `forge_api` | URL | `""` | Forgejo/Gitea API (`https://git.example/api/v1`) |
 | `forge_repo` | string | `""` | `owner/repo` |
 | `forge_token_file` | path | `""` | a token that reads the repository; the three `forge_` keys set: open Renovate pull requests listed in Updates |

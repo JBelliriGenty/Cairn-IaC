@@ -71,6 +71,10 @@ SERVER = {
     # Forgejo/Gitea API (https://host/api/v1), owner/repo and a read token file: the Updates view lists the open Renovate
     # pull requests with their CI state. ca_file: a CA bundle for the API's certificate (empty: the system's).
     "forge_api": "", "forge_repo": "", "forge_token_file": "", "forge_ca_file": "",
+    # A JSON file saying where each guest runs now, kept fresh by you (a timer): Proxmox's own list
+    # (`pvesh get /cluster/resources --type vm --output-format json`) or {guest id: node}. It wins over Tofu's node_name,
+    # which HA and migrations leave behind. Empty, missing or unreadable: the declared nodes.
+    "guest_nodes_file": "",
 }
 VM_RESOURCES = ("proxmox_virtual_environment_vm", "proxmox_virtual_environment_container")
 FW_RESOURCE = "proxmox_virtual_environment_firewall_rules"
@@ -760,6 +764,11 @@ def collect(cfg, repo):
     over, rs_file, rs_error = repo_settings(cfg, repo)
     cfg = {**cfg, **over}
     machines, firewalls = read_tofu(repo / cfg["tofu_dir"], repo)
+    live = guest_nodes(cfg.get("guest_nodes_file"))  # where the guests run now wins over the declared node
+    for m in machines:
+        m["node"] = live.get(str(m["id"]), m["node"])
+    for cid, fw in firewalls.items():
+        fw["node"] = live.get(cid, fw["node"])
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
     cap = capacity(machines, cfg.get("node_capacity"), ratio(cfg.get("vcpu_ratio")))
@@ -809,12 +818,27 @@ def render(data):
     return page.replace("/*DATA*/null", blob).replace("<title>Cairn IaC</title>", f"<title>{escape(data['title'])}</title>")
 
 
+def guest_nodes(path):
+    """{guest id (str): node} from guest_nodes_file; {} when unset, missing or unreadable (the declared nodes stay)."""
+    try:
+        raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        return {}
+    if isinstance(raw, list):
+        raw = {g.get("vmid"): g.get("node") for g in raw if isinstance(g, dict)}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if k is not None and isinstance(v, str) and re.fullmatch(r"[\w.-]{1,64}", v)}
+
+
 def load_config(path):
     raw = json.loads(path.read_text(encoding="utf-8")) if path else {}
     cfg = {**DEFAULTS, **SERVER, **raw}
     for k in ("git", "firewall_lists"):
         cfg[k] = {**DEFAULTS[k], **(raw.get(k) or {})}
     cfg["base"] = path.parent if path else pathlib.Path.cwd()
+    if cfg["guest_nodes_file"]:
+        cfg["guest_nodes_file"] = str(cfg["base"] / cfg["guest_nodes_file"])
     return cfg
 
 
@@ -1600,10 +1624,11 @@ class App:
 
     def model(self, s, repo, rev):
         """(stamp, collected model) at this commit and these settings; stamp None on error (caller holds the lock)."""
-        stamp = (rev, self.settings_file.stat().st_mtime)
+        gn = self.cfg.get("guest_nodes_file")
+        stamp = (rev, self.settings_file.stat().st_mtime, os.path.getmtime(gn) if gn and os.path.exists(gn) else 0)
         if self.cache[0] != stamp or not rev:
             try:
-                self.cache = (stamp, collect(s, repo))
+                self.cache = (stamp, collect({**s, "guest_nodes_file": gn}, repo))
             except (OSError, yaml.YAMLError) as e:  # no clone yet, wrong paths: the Settings page stays reachable
                 self.cache = (None, {**collect_empty(s), "error": str(e)})
         return self.cache
