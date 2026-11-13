@@ -608,6 +608,9 @@ const FR = {
   "No settings file in the repository (Settings: repo_settings)": "Pas de fichier de réglages dans le dépôt (Réglages : repo_settings)",
   "{file} is not a JSON object: edit it in the file": "{file} n'est pas un objet JSON : corrigez-le dans le fichier",
   "The repository's settings file cannot be used: {error}": "Le fichier de réglages du dépôt est inutilisable : {error}",
+  "Where the guests run": "Emplacement des invités",
+  "The file saying where the guests run is missing: the nodes shown are the declared ones": "Le fichier qui dit où tournent les invités est absent : les nœuds affichés sont ceux déclarés",
+  "Where the guests run was last read {hours} h ago: the nodes and memory use shown may be out of date": "L'emplacement des invités a été lu il y a {hours} h : les nœuds et la mémoire utilisée affichés peuvent être périmés",
   "Settings file of the repository": "Fichier de réglages du dépôt",
   "Settings file in the repository (JSON, empty: these settings only): its accepted findings, vCPU ratio, node capacity and required roles win over the settings here, and CI reads them too. With it, accepting a finding is a commit.":
     "Fichier de réglages dans le dépôt (JSON, vide : ces réglages seuls) : ses écarts acceptés, ratio vCPU, capacité des nœuds et rôles obligatoires l'emportent sur les réglages d'ici, et la CI les lit aussi. Avec lui, accepter un écart est un commit.",
@@ -1129,7 +1132,7 @@ $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><
 
 // ---------- drift: findings of cairn-iac.py, grouped by kind, warnings first ----------
 const KINDS = {not_in_inventory: "Created by Tofu, not in the inventory", ip_mismatch: "Addresses that differ", firewall_off: "Firewalls turned off",
-  repo_settings: "Settings file of the repository", firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", no_description: "Without a description",
+  repo_settings: "Settings file of the repository", guest_nodes: "Where the guests run", firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", no_description: "Without a description",
   description_mismatch: "Descriptions that differ", not_in_host_table: "Missing from the host table", not_in_tofu: "In the inventory, not created by Tofu",
   no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows", over_allocated: "Nodes over their capacity", memory_pressure: "Nodes short of memory"};
 $("#drift-lead").innerHTML = esc(t("Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.", {cmd: "\u0000"})).replace("\u0000", code("cairn-iac.py --check"));

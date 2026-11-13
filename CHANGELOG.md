@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.0 (2026-11-13)
+
+- `guest_nodes_file` not refreshed for over an hour, or missing, is a drift
+  warning (`guest_nodes:stale`): the page says the places and memory use it
+  shows may be out of date instead of showing them as current.
+
 ## 1.9.0 (2026-11-13)
 
 - With `guest_nodes_file` in Proxmox's list form, a node's memory is judged

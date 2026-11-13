@@ -110,6 +110,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [f["msg"].format(**f["vars"]) for f in dm["findings"] if f["kind"] == "memory_pressure"] == ["pve2's guests use 9.8 GiB of memory, over 90% of the 10 declared"]
     gn.write_text(json.dumps([{"vmid": 201, "node": "pve2", "status": "running", "mem": 2**30}]))
     assert not [f for f in ci.collect(cfgn, repon)["findings"] if f["kind"] in ("memory_pressure",) or f["id"] == "over_allocated:pve2:memory"]
+    # a file nothing refreshes any more is said, not shown as current; so is a missing one
+    stale_of = lambda: [f["msg"].format(**f["vars"]) for f in ci.collect(cfgn, repon)["findings"] if f["id"] == "guest_nodes:stale"]
+    assert stale_of() == [] and ci.guest_nodes_stale("") is None
+    os.utime(gn, (0, ci.time.time() - 3 * 3600 - 60))
+    assert stale_of() == ["Where the guests run was last read 3 h ago: the nodes and memory use shown may be out of date"], stale_of()
+    assert ci.guest_nodes_stale(str(gn) + ".none") == -1
     gn.write_text('{"201": "pve2"}')  # the plain form
     assert node_of()["web"] == "pve2"
     gn.write_text("not json")

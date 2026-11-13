@@ -803,6 +803,11 @@ def collect(cfg, repo):
         "repo_settings": {"file": rs_file, "keys": sorted(over), "error": rs_error} if rs_file else None,
         "updates": renovate_policy(cfg, repo),
     }
+    stale = guest_nodes_stale(cfg.get("guest_nodes_file"))
+    if stale is not None:  # what refreshes the file has stopped: say it rather than show old places as current
+        findings.insert(0, {"id": "guest_nodes:stale", "kind": "guest_nodes", "severity": "warn", "machine": "", "file": "", "line": 0, "vars": {"hours": stale},
+                            "msg": "The file saying where the guests run is missing: the nodes shown are the declared ones" if stale < 0 else
+                                   "Where the guests run was last read {hours} h ago: the nodes and memory use shown may be out of date"})
     if rs_error:
         findings.insert(0, {"id": "repo_settings:" + rs_file, "kind": "repo_settings", "severity": "warn", "machine": "", "file": rs_file,
                             "line": 1, "msg": "The repository's settings file cannot be used: {error}", "vars": {"error": rs_error}})
@@ -839,6 +844,21 @@ def guest_nodes(path):
     if not isinstance(raw, dict):
         return {}
     return {str(k): v for k, v in raw.items() if k is not None and isinstance(v, str) and re.fullmatch(r"[\w.-]{1,64}", v)}
+
+
+# ponytail: a fixed hour before guest_nodes_file counts as stale; a setting if someone refreshes it less often
+GUEST_NODES_MAX_AGE = 3600
+
+
+def guest_nodes_stale(path, now=None):
+    """None: no file asked for, or a fresh one; else hours since it was written (-1: missing)."""
+    if not path:
+        return None
+    try:
+        age = (now or time.time()) - os.path.getmtime(path)
+    except OSError:
+        return -1
+    return int(age // 3600) if age > GUEST_NODES_MAX_AGE else None
 
 
 def guest_memory(path):
@@ -1648,7 +1668,7 @@ class App:
     def model(self, s, repo, rev):
         """(stamp, collected model) at this commit and these settings; stamp None on error (caller holds the lock)."""
         gn = self.cfg.get("guest_nodes_file")
-        stamp = (rev, self.settings_file.stat().st_mtime, os.path.getmtime(gn) if gn and os.path.exists(gn) else 0)
+        stamp = (rev, self.settings_file.stat().st_mtime, os.path.getmtime(gn) if gn and os.path.exists(gn) else 0, guest_nodes_stale(gn))
         if self.cache[0] != stamp or not rev:
             try:
                 self.cache = (stamp, collect({**s, "guest_nodes_file": gn}, repo))

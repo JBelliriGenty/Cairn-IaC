@@ -215,6 +215,7 @@ greyed, and `--check` no longer fails on it.
 | `over_allocated:<node>:<cores\|memory\|disk>` | warn | a node given more than its `node_capacity` |
 | `memory_pressure:<node>` | warn | with `guest_nodes_file` (Proxmox's list): the node's running guests use over 90% of its declared memory; replaces `over_allocated:<node>:memory` |
 | `repo_settings:<file>` | warn | the repository's settings file cannot be used |
+| `guest_nodes:stale` | warn | `guest_nodes_file` is missing or was written over an hour ago: what refreshes it has stopped |
 | `not_in_tofu:<machine>` | info | an inventory host no Tofu block creates |
 | `no_playbook:<machine>` | info | an inventory host no playbook targets |
 | `firewall_no_options:<machine>` | info | rules without a firewall options resource |
