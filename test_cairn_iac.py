@@ -101,6 +101,15 @@ with tempfile.TemporaryDirectory() as tmp:
     dn = ci.collect(cfgn, repon)
     assert node_of()["web"] == "pve2" and node_of()["db"] == "pve2" and dn["firewalls"]["201"]["node"] == "pve2"
     assert dn["capacity"]["pve2"]["guests"] == 3 and "pve1" not in {k for k, c in dn["capacity"].items() if c["guests"]}
+    # with Proxmox's list, memory is judged on what the running guests use, not on the sum of their ceilings
+    assert dn["capacity"]["pve2"].get("memory_used") is None  # no `mem` in the list: the ceilings still count
+    gn.write_text(json.dumps([{"vmid": 201, "node": "pve2", "status": "running", "mem": 9.5 * 2**30}, {"vmid": 202, "node": "pve2", "status": "stopped", "mem": 2**40},
+                              {"vmid": 203, "node": "pve2", "status": "running", "mem": 2**28}]))
+    dm = ci.collect(cfgn, repon)
+    assert dm["capacity"]["pve2"]["memory_used"] == 9984, dm["capacity"]["pve2"]
+    assert [f["msg"].format(**f["vars"]) for f in dm["findings"] if f["kind"] == "memory_pressure"] == ["pve2's guests use 9.8 GiB of memory, over 90% of the 10 declared"]
+    gn.write_text(json.dumps([{"vmid": 201, "node": "pve2", "status": "running", "mem": 2**30}]))
+    assert not [f for f in ci.collect(cfgn, repon)["findings"] if f["kind"] in ("memory_pressure",) or f["id"] == "over_allocated:pve2:memory"]
     gn.write_text('{"201": "pve2"}')  # the plain form
     assert node_of()["web"] == "pve2"
     gn.write_text("not json")

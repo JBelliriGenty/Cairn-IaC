@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0 (2026-11-13)
+
+- With `guest_nodes_file` in Proxmox's list form, a node's memory is judged
+  on what its running guests use now, not on the sum of their ceilings (a
+  container's memory is a limit, not a reservation): the map shows both, and
+  the warning becomes `memory_pressure` (use over 90% of the declared
+  capacity) instead of `over_allocated:<node>:memory`. vCPU and disk are
+  unchanged; so is everything without the file.
+
 ## 1.8.0 (2026-11-13)
 
 - `guest_nodes_file`: a JSON file saying where each guest runs now

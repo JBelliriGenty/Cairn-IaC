@@ -213,6 +213,7 @@ greyed, and `--check` no longer fails on it.
 | `firewall_orphan:<machine>` | warn | a firewall whose id matches no machine |
 | `firewall_off:<machine>` | warn | a guest firewall turned off that has rules |
 | `over_allocated:<node>:<cores\|memory\|disk>` | warn | a node given more than its `node_capacity` |
+| `memory_pressure:<node>` | warn | with `guest_nodes_file` (Proxmox's list): the node's running guests use over 90% of its declared memory; replaces `over_allocated:<node>:memory` |
 | `repo_settings:<file>` | warn | the repository's settings file cannot be used |
 | `not_in_tofu:<machine>` | info | an inventory host no Tofu block creates |
 | `no_playbook:<machine>` | info | an inventory host no playbook targets |

@@ -485,7 +485,9 @@ const FR = {
   "Search": "Rechercher", "Download JSON": "Télécharger le JSON",
   "{n} unknown": "{n} inconnue", "{n} unknown#pl": "{n} inconnues",
   "Not a literal number in Tofu (a variable?): {list}": "Pas un nombre littéral dans Tofu (une variable ?) : {list}",
-  "Nodes over their capacity": "Nœuds au-delà de leur capacité",
+  "Nodes over their capacity": "Nœuds au-delà de leur capacité", "Nodes short of memory": "Nœuds à court de mémoire",
+  "{node}'s guests use {used} GiB of memory, over 90% of the {total} declared": "Les invités de {node} utilisent {used} Gio de mémoire, plus de 90 % des {total} déclarés",
+  "{used} in use": "{used} utilisés", "What the running guests use now; the first figure is the sum of their ceilings": "Ce que les invités en marche utilisent maintenant ; le premier chiffre est la somme de leurs plafonds",
   "{node} gives its guests {used} {what}, more than the {total} declared": "{node} donne à ses invités {used} {what}, plus que les {total} déclarés",
   "GiB of memory": "Gio de mémoire", "GB of disk": "Go de disque", "TB of disk": "To de disque",
   "Node capacity": "Capacité des nœuds",
@@ -745,8 +747,8 @@ const CAPF = [["cores", "vCPU", n => n], ["memory", "Memory", mem], ["disk", "Di
 const capBlock = n => {
   const c = (D.capacity || {})[n];
   return !c ? "" : `<div class="cap">${CAPF.map(([f, label, fmt]) => {
-    const used = c[f], tot = c.total[f], unk = c.unknown[f], pct = tot ? used / tot * 100 : 0;
-    return `<div class="meter${pct > 100 ? " bad" : pct > 80 ? " warn" : ""}"><div class="row"><span class="label"${f === "cores" && c.cores_declared && c.cores_declared !== tot ? ` title="${esc(t("{cores} cores × {ratio} vCPU per core", {cores: c.cores_declared, ratio: +(tot / c.cores_declared).toFixed(2)}))}"` : ""}>${t(label)}</span><span class="label"><b>${used ? esc(fmt(used, Math.max(used, tot || 0))) : 0}</b>${tot ? " / " + esc(fmt(tot, Math.max(used, tot))) : ""}${unk.length ? ` <span title="${esc(t("Not a literal number in Tofu (a variable?): {list}", {list: unk.join(", ")}))}">+ ${esc(tp(unk.length, "{n} unknown", "{n} unknown"))}</span>` : ""}</span></div>${tot ? `<div class="bar thin"><i style="width:${Math.min(pct, 100).toFixed(1)}%"></i></div>` : ""}</div>`;
+    const used = c[f], tot = c.total[f], unk = c.unknown[f], live = f === "memory" && c.memory_used != null, pct = tot ? (live ? c.memory_used : used) / tot * 100 : 0;
+    return `<div class="meter${pct > 100 ? " bad" : pct > 80 ? " warn" : ""}"><div class="row"><span class="label"${f === "cores" && c.cores_declared && c.cores_declared !== tot ? ` title="${esc(t("{cores} cores × {ratio} vCPU per core", {cores: c.cores_declared, ratio: +(tot / c.cores_declared).toFixed(2)}))}"` : ""}>${t(label)}</span><span class="label"><b>${used ? esc(fmt(used, Math.max(used, tot || 0))) : 0}</b>${tot ? " / " + esc(fmt(tot, Math.max(used, tot))) : ""}${unk.length ? ` <span title="${esc(t("Not a literal number in Tofu (a variable?): {list}", {list: unk.join(", ")}))}">+ ${esc(tp(unk.length, "{n} unknown", "{n} unknown"))}</span>` : ""}${live ? ` · <span title="${esc(t("What the running guests use now; the first figure is the sum of their ceilings"))}">${esc(t("{used} in use", {used: mem(c.memory_used)}))}</span>` : ""}</span></div>${tot ? `<div class="bar thin"><i style="width:${Math.min(pct, 100).toFixed(1)}%"></i></div>` : ""}</div>`;
   }).join("")}</div>`;
 };
 const colNodes = [...new Set([...nodeKeys, ...Object.values(M).map(m => m.node).filter(Boolean)])];
@@ -1129,7 +1131,7 @@ $("#roles").innerHTML = `<thead><tr><th>${t("Role")}</th><th>${t("Tasks")}</th><
 const KINDS = {not_in_inventory: "Created by Tofu, not in the inventory", ip_mismatch: "Addresses that differ", firewall_off: "Firewalls turned off",
   repo_settings: "Settings file of the repository", firewall_orphan: "Firewalls for no machine", required_roles: "Required roles missing", no_description: "Without a description",
   description_mismatch: "Descriptions that differ", not_in_host_table: "Missing from the host table", not_in_tofu: "In the inventory, not created by Tofu",
-  no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows", over_allocated: "Nodes over their capacity"};
+  no_playbook: "Targeted by no playbook", firewall_no_options: "Firewall state not declared", half_open: "Half-open flows", over_allocated: "Nodes over their capacity", memory_pressure: "Nodes short of memory"};
 $("#drift-lead").innerHTML = esc(t("Where Tofu, the firewalls, the inventory and the playbooks disagree. Warnings first; a note can be on purpose. In CI, {cmd} lists the same and fails on a warning.", {cmd: "\u0000"})).replace("\u0000", code("cairn-iac.py --check"));
 const byKind = {};
 for (const f of F) (byKind[f.kind] ||= []).push(f);

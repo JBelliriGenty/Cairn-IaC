@@ -496,6 +496,13 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
                 ident=f"{f['src']['k']}>{f['dst']['k']}:{what}", src=f["src"]["k"], dst=f["dst"]["k"], what=what)
     for n, c in (cap or {}).items():
         for f, what, scale in CAP:
+            if f == "memory" and c.get("memory_used") is not None:
+                # Known use (guest_nodes_file) replaces the sum of ceilings: a container's memory is a limit, not a reservation.
+                # ponytail: fixed 90 % threshold, make it a setting if someone needs another
+                if c["total"].get(f) is not None and c["memory_used"] > 0.9 * c["total"][f]:
+                    add("memory_pressure", "warn", n, "", 0, "{node}'s guests use {used} GiB of memory, over 90% of the {total} declared",
+                        node=c["name"], used=f"{round(c['memory_used'] / scale, 1):g}", total=f"{round(c['total'][f] / scale, 2):g}")
+                continue
             if c["total"].get(f) is not None and c[f] > c["total"][f]:
                 if f == "disk" and c[f] >= 1024:  # as the page shows it: TB of 1024 GB
                     scale, what = 1024, "TB of disk"
@@ -772,6 +779,9 @@ def collect(cfg, repo):
     groups, direct, ips, playbooks, roles = read_ansible(cfg, repo)
     fl = flows(machines, firewalls, ips)
     cap = capacity(machines, cfg.get("node_capacity"), ratio(cfg.get("vcpu_ratio")))
+    for n, used in guest_memory(cfg.get("guest_nodes_file")).items():
+        if n in cap:
+            cap[n]["memory_used"] = used
     inv_text = (repo / cfg["inventory"]).read_text(encoding="utf-8")
     descs = read_descriptions(inv_text)
     ht = repo_rel(cfg.get("host_table"))
@@ -829,6 +839,19 @@ def guest_nodes(path):
     if not isinstance(raw, dict):
         return {}
     return {str(k): v for k, v in raw.items() if k is not None and isinstance(v, str) and re.fullmatch(r"[\w.-]{1,64}", v)}
+
+
+def guest_memory(path):
+    """{node key: MiB its running guests use now} from guest_nodes_file in Proxmox's list form (`mem` in bytes); else {}."""
+    try:
+        raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8")) if path else []
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for g in raw if isinstance(raw, list) else []:
+        if isinstance(g, dict) and g.get("status") == "running" and isinstance(g.get("node"), str) and isinstance(g.get("mem"), (int, float)):
+            out[key(g["node"])] = out.get(key(g["node"]), 0) + g["mem"] / 1048576
+    return {n: round(v) for n, v in out.items()}
 
 
 def load_config(path):
