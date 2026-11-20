@@ -26,6 +26,8 @@ assert data["nodes"] == ["pve1", "pve2"] and data["playbook_prefix"] == "playboo
 assert data["direct"]["guests"] == ["db", "web"]
 assert "<title>Example lab</title>" in page and "/*DATA*/" not in page
 assert "#nav button[hidden] { display: none; }" in page  # server-only views stay out of the static page
+# 1.10.1: every API call goes through call(), which reloads when the sign-in proxy's session has ended
+assert page.count("await fetch(") == 1 and 'redirect: "manual"' in page and page.count("await call(") == 3
 
 # ---- drift: each kind once in the example (more.tf, the inventory's db and printer) ----
 found = {(f["kind"], f["severity"], f["machine"], f["file"], f["line"]) for f in data["findings"]}

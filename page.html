@@ -580,6 +580,7 @@ const FR = {
   "Check the Settings.": "Vérifiez les Réglages.",
   "Access denied": "Accès refusé",
   "Invalid request": "Requête invalide",
+  "Your session has ended: nothing was changed. Signing in again…": "Votre session est terminée : rien n'a été modifié. Reconnexion…",
   "Invalid {what}: {value}": "{what} invalide : {value}",
   "{what} must be between {lo} and {hi}": "{what} : entre {lo} et {hi}",
   "No literal value for {what} in the block (variable?): edit it in the file": "Pas de valeur littérale pour {what} dans le bloc (variable ?) : modifiez le fichier",
@@ -913,7 +914,7 @@ async function loadHistory(k) {
   body.innerHTML = `<p class="empty">${t("Loading…")}</p>`;
   let r;
   try {
-    const res = await fetch("/api/history?machine=" + encodeURIComponent(k));
+    const res = await call("/api/history?machine=" + encodeURIComponent(k));
     r = await res.json();
     if (!res.ok || r.error) throw r;
   } catch (e) { if (current === k) body.innerHTML = `<p class="err">${esc(errText(e.error ? e : {error: "Invalid request"}))}</p>`; return; }
@@ -932,8 +933,17 @@ $("#detail").addEventListener("toggle", e => {
 }, true);
 
 // ---------- editing (server mode): a form gives an edit, the server shows its diff, then commits and pushes ----------
+// the sign-in proxy's session has ended (Authelia answers 401, or sends the request to its portal): sign in again
+async function call(path, opts = {}) {
+  const r = await fetch(path, {...opts, redirect: "manual"});
+  if (r.type === "opaqueredirect" || r.status === 401) {
+    setTimeout(() => location.reload(), 2500);
+    throw {error: "Your session has ended: nothing was changed. Signing in again…"};
+  }
+  return r;
+}
 async function api(path, body) {
-  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const r = await call(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
   const j = await r.json().catch(() => ({error: "Invalid request"}));
   if (!r.ok || j.error) throw j.error ? j : {error: "Invalid request"};
   return j;
@@ -1243,8 +1253,8 @@ function prCard() {
 }
 async function loadPrs() {
   if (!S || prState) return;
-  try { const r = await fetch("/api/updates"); prState = r.ok ? await r.json() : {error: String(r.status), prs: []}; }
-  catch (e) { prState = {error: String(e), prs: []}; }
+  try { const r = await call("/api/updates"); prState = r.ok ? await r.json() : {error: String(r.status), prs: []}; }
+  catch (e) { if (e.error) return; prState = {error: String(e), prs: []}; }  // e.error: session ended, the page reloads
   const c = $("#prs"); if (c) c.innerHTML = prCard();
 }
 if (U) { document.querySelector('#nav [data-view="updates"]').hidden = false; renderUpdates(); }

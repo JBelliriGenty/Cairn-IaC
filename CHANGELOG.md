@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.1 (2026-11-20)
+
+- When the sign-in proxy's session has ended (401, or a request sent to its
+  portal), the page says nothing was changed and reloads to sign in again,
+  instead of showing the browser's error ("Load failed").
+
 ## 1.10.0 (2026-11-13)
 
 - `guest_nodes_file` not refreshed for over an hour, or missing, is a drift
