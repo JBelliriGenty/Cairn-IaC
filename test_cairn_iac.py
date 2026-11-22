@@ -469,6 +469,25 @@ with tempfile.TemporaryDirectory() as tmp:
     # a VM model, its firewall rules without options; the disk may be smaller than the model's
     r = ci.apply({**web, "model": "proxmox_virtual_environment_vm.db", "name": "db2", "host": "db2", "vm_id": 206, "ip": "10.0.0.26", "disk": 20}, cfg, repo)
     assert r["targets"] == ["proxmox_virtual_environment_vm.db2", "proxmox_virtual_environment_firewall_rules.db2"], r["targets"]
+    # 1.11.0: with host_table and its hosts:begin/end markers, the host table is written again in the same edit
+    (repo / "HOSTS.md").write_text("# Hosts\n\n<!-- hosts:begin -->\n<!-- generated -->\n| old | row |\n<!-- hosts:end -->\nafter\n", encoding="utf-8")
+    r = ci.apply({**web, "name": "cache3", "host": "cache3", "vm_id": 207, "ip": "10.0.0.27", "playbook": "", "role": ""},
+                 {**cfg, "host_table": "HOSTS.md", "lang": "fr"}, repo)
+    ht = dict((rel, new) for rel, _, new in r["files"])["HOSTS.md"]
+    lines = ht.split("\n")
+    assert lines[:5] == ["# Hosts", "", "<!-- hosts:begin -->", "<!-- generated -->", "| Nom | IP | Où | Rôle | Accès |"], lines
+    assert lines[-3:] == ["<!-- hosts:end -->", "after", ""] and "| old | row |" not in ht, lines
+    rows = [l for l in lines if l.startswith("| ") and "IP" not in l]
+    assert rows[0].startswith("| PVE1 |") and "nœud Proxmox" in rows[0], rows
+    # sorted: nodes, then guests by IP; no Tofu description in this model: "?"; not in Tofu: "invité ?"
+    assert rows.index("| CACHE2 | 10.0.0.25 | LXC 205 | ? | SSH |") < rows.index("| CACHE3 | 10.0.0.27 | LXC 207 | ? | SSH |") < rows.index("| PRINTER | 10.0.0.40 | invité ? | ? | SSH |"), rows
+    # without the markers the file is left alone (the not_in_host_table finding still says what is missing)
+    (repo / "HOSTS.md").write_text("| WEB | front |\n", encoding="utf-8")
+    r = ci.apply({**web, "name": "cache3", "host": "cache3", "vm_id": 207, "ip": "10.0.0.27"}, {**cfg, "host_table": "HOSTS.md"}, repo)
+    assert "HOSTS.md" not in [rel for rel, _, _ in r["files"]]
+    assert ci.put_host_table("no markers", ["| a |"]) is None
+    assert ci.put_host_table("<!-- hosts:begin -->\n<!-- hosts:end -->", ["| a |"]) == "<!-- hosts:begin -->\n| a |\n<!-- hosts:end -->"
+    assert ci.host_table([], [], [], {}, "xx")[0] == "| Name | IP | Where | Role | Access |"  # unknown language: English
 
     # every refusal
     no = lambda **kw: refused(ci.apply, {**web, "name": "x9", "host": "x9", "vm_id": 290, "ip": "10.0.0.90", **kw}, cfg, repo)

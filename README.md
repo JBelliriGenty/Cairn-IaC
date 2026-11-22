@@ -240,7 +240,7 @@ Every key is optional; paths are relative to the config file.
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
 | `require_description` | every inventory machine must say what it is for: Tofu `description` or a `description` host variable (`false`) |
-| `host_table` | a Markdown file whose table must list every inventory host (empty: not checked) |
+| `host_table` | a Markdown file whose table must list every inventory host; between `<!-- hosts:begin -->` / `<!-- hosts:end -->` the server writes that table (empty: not checked) |
 | `node_capacity` | `{node: {cores, memory, disk}}`: what each node can give its guests, memory in GiB, disk in GB (empty: sums only) |
 | `vcpu_ratio` | vCPU a node may give per declared core, CPU time being shared (`1`; e.g. `4`) |
 | `accepted_findings` | `{finding id: reason}`: drift findings kept on purpose, still listed but not counted, `--check` passes on them (empty) |
@@ -322,7 +322,14 @@ commit:
   model's rules, or with none of its own (a module keeps its common rules);
 - the host in the inventory groups picked (the model's direct groups by
   default), with its `ansible_host` in the group where the model has its
-  own; optionally a role in a playbook, as above.
+  own; optionally a role in a playbook, as above;
+- with `host_table`, when that file has the `<!-- hosts:begin -->` and
+  `<!-- hosts:end -->` markers, its table rows there written again from the
+  new state: one row per inventory host (`| Name | IP | Where | Role | Access |`,
+  in the page's `lang`), nodes, bare metal, then guests by IP; role = the
+  description, access = an `access` host variable (default SSH). Other lines
+  between the markers (a comment) are kept. The new host is thus listed in
+  the same commit, and `not_in_host_table` does not fail its pull request.
 
 It refuses rather than guesses: the name must be new to Tofu and the
 inventory, the `vm_id` unused by any Tofu block (100 to 999999999), the

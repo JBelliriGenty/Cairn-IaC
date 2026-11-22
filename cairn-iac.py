@@ -226,15 +226,15 @@ def read_inventory(text):
     return groups, direct, ips
 
 
-def read_descriptions(text):
-    """{host: its `description` host variable} from the inventory, what the machine is for."""
+def read_descriptions(text, var="description"):
+    """{host: its `description` host variable} from the inventory, what the machine is for (or another variable)."""
     out = {}
 
     def walk(d):
         d = d or {}
         for h, v in (d.get("hosts") or {}).items():
-            if isinstance(v, dict) and str(v.get("description") or "").strip():
-                out[h] = str(v["description"]).strip()
+            if isinstance(v, dict) and str(v.get(var) or "").strip():
+                out[h] = str(v[var]).strip()
         for cd in (d.get("children") or {}).values():
             walk(cd)
 
@@ -245,6 +245,43 @@ def read_descriptions(text):
 def table_hosts(text):
     """Words of the Markdown table rows of a file, lower-cased: the names a host table lists."""
     return {w.lower() for l in text.splitlines() if l.lstrip().startswith("|") for w in re.findall(r"[A-Za-z0-9_.-]+", l)}
+
+
+HOST_TABLE_MARKS = ("<!-- hosts:begin -->", "<!-- hosts:end -->")
+HOST_TABLE_WORDS = {"en": ("| Name | IP | Where | Role | Access |", "Proxmox node", "bare metal", "guest"),
+                    "fr": ("| Nom | IP | Où | Rôle | Accès |", "nœud Proxmox", "physique", "invité")}
+
+
+def host_table(machines, nodes, bare, access, lang):
+    """The lines of the host table: one row per inventory host, nodes, bare metal, then guests by IP. Role = description;
+    where = Tofu's kind and id (not the node: HA moves guests); access = the `access` host variable (default SSH)."""
+    head, w_node, w_bare, w_guest = HOST_TABLE_WORDS.get(lang) or HOST_TABLE_WORDS["en"]
+    nodes, bare = set(nodes), set(bare)
+    cell = lambda s: str(s).replace("|", "\\|")  # noqa: E731
+    rows = []
+    for m in machines:
+        h, t = m["host"], m["tofu"]
+        if not h:
+            continue  # not in the inventory (firewall only, test VM): not listed
+        where = w_node if h in nodes else w_bare if h in bare else f"{t['kind'] if t else w_guest} {m['id'] if m['id'] is not None else '?'}"
+        ip = ip_or_none(m["ip"]) or ipaddress.ip_address("255.255.255.255")
+        rows.append(((0 if h in nodes else 1 if h in bare else 2, ip),
+                     f"| {m['name'].upper()} | {m['ip']} | {where} | {cell(m['description'] or '?')} | {cell(access.get(h, 'SSH'))} |"))
+    return [head, "|---|---|---|---|---|", *(r for _, r in sorted(rows))]
+
+
+def put_host_table(text, lines):
+    """The text with the table rows between the hosts:begin/end markers replaced by these lines, other lines there
+    (comments) kept; None when the markers are missing."""
+    b, e = HOST_TABLE_MARKS
+    i = text.find(b)
+    j = text.find(e, i + len(b)) if i >= 0 else -1
+    if j < 0:
+        return None
+    inner = text[i + len(b):j].split("\n")
+    rest = [l for l in inner if not l.lstrip().startswith("|")]
+    at = next((n for n, l in enumerate(inner) if l.lstrip().startswith("|")), len(rest) - (rest[-1] == ""))
+    return text[:i + len(b)] + "\n".join(rest[:at] + list(lines) + rest[at:]) + text[j:]
 
 
 def read_ansible(cfg, repo):
@@ -1401,6 +1438,17 @@ def new_machine(op, cfg, repo):
         and ips2.get(host) == str(ip) and all(host in d2[g] for g in gs) and sum(key(h) == key(host) for h in ips2) == 1
     if not ok:
         raise Refused("The edit did not give the expected file: edit it in the file")
+    # the host table (host_table with hosts:begin/end markers): written again from the new state, so the
+    # not_in_host_table finding does not fail the pull request
+    ht = repo_rel({**cfg, **repo_settings(cfg, repo)[0]}.get("host_table"))
+    if ht and (repo / ht).is_file():
+        g2 = read_inventory(inv_text)[0]
+        nb = g2.get(cfg["node_group"], []), g2.get(cfg["bare_metal_group"], [])
+        merged = merge({"tofu": ms, "firewalls": fws, "ips": ips2, "descriptions": read_descriptions(inv_text),
+                        "playbooks": {}, "groups": {}, "nodes": nb[0], "bare": nb[1]})
+        new = put_host_table(read(ht), host_table(merged, *nb, read_descriptions(inv_text, "access"), cfg.get("lang")))
+        if new is not None:
+            texts[ht] = new
     kind = "LXC" if model["kind"] == "LXC" else "VM"
     files = [(rel, (repo / rel).read_text(encoding="utf-8"), new) for rel, new in texts.items()]
     return {"files": files, "message": f"{name}: new {kind} {vid} on {node}, {ip} (model {model['name']})", "targets": targets}

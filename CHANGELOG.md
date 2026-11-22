@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.11.0 (2026-11-22)
+
+- New machine writes the host table too: with `host_table` and the
+  `<!-- hosts:begin -->` / `<!-- hosts:end -->` markers in that file, the
+  table rows between them are written again from the new state (one row
+  per inventory host: name, IP, where, role, access), in the same commit.
+  The new host no longer fails its own pull request's `--check`
+  (`not_in_host_table`). Other lines between the markers are kept; without
+  the markers the file is left alone, as before.
+- `host_table()` and `put_host_table()` can be called by a script of yours
+  that keeps the same table up to date from the command line.
+
 ## 1.10.1 (2026-11-20)
 
 - When the sign-in proxy's session has ended (401, or a request sent to its

@@ -51,7 +51,7 @@ Every key is optional.
 | `generic_playbooks` | list | `[]` | playbook names (no `.yml`) never shown as a machine's main playbook, such as fleet-wide upgrades |
 | `required_roles` | list | `[]` | roles every inventory host must get; a host missing one is a drift warning |
 | `require_description` | bool | `false` | every inventory host must say what it is for: its Tofu `description`, or a `description` host variable in the inventory (Tofu's wins on the page) |
-| `host_table` | path | `""` | a Markdown file whose table lists the hosts (a README, a CLAUDE.md): an inventory host whose name is in none of its table rows (`\|` lines, case-insensitive) is a drift warning; empty: not checked |
+| `host_table` | path | `""` | a Markdown file whose table lists the hosts (a README, a CLAUDE.md): an inventory host whose name is in none of its table rows (`\|` lines, case-insensitive) is a drift warning; empty: not checked. With the markers `<!-- hosts:begin -->` / `<!-- hosts:end -->`, a new machine from the page writes the table rows between them again (name, IP, where, role = description, access = an `access` host variable, default SSH; headers in `lang`) |
 | `node_capacity` | object | `{}` | see [`node_capacity`](#node_capacity) |
 | `vcpu_ratio` | number | `1` | vCPU a node may give per declared core, between 1 and 64 (a bad value counts as 1) |
 | `accepted_findings` | object | `{}` | finding id → reason, see [Drift findings](#drift-findings) |
