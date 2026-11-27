@@ -47,7 +47,7 @@ Every key is optional.
 | `playbooks` | path | `"ansible/playbooks"` | every `*.yml` in it is a playbook |
 | `roles` | path | `"ansible/roles"` | |
 | `node_group` | string | `"proxmox_nodes"` | inventory group of the Proxmox nodes: the columns of the map |
-| `bare_metal_group` | string | `"bare_metal"` | inventory group of physical machines outside the cluster |
+| `bare_metal_group` | string or list | `"bare_metal"` | inventory group of physical machines outside the cluster, or a list of groups (`["bare_metal", "macos"]`): every host of those groups is physical (a group that upgrade playbooks must not target can count too). Also a key of the [repository settings file](#the-repositorys-settings-file) |
 | `generic_playbooks` | list | `[]` | playbook names (no `.yml`) never shown as a machine's main playbook, such as fleet-wide upgrades |
 | `required_roles` | list | `[]` | roles every inventory host must get; a host missing one is a drift warning |
 | `require_description` | bool | `false` | every inventory host must say what it is for: its Tofu `description`, or a `description` host variable in the inventory (Tofu's wins on the page) |
@@ -185,8 +185,9 @@ Its keys win over `config.json` and over the server's settings, so
 | `required_roles` | list of strings |
 | `require_description` | bool |
 | `host_table` | string |
+| `bare_metal_group` | string, or list of strings |
 
-Only these six keys are read; any other is ignored. A key of the wrong
+Only these seven keys are read; any other is ignored. A key of the wrong
 type is left out (the setting from the config stays) and the file shows as
 a `repo_settings:.cairn-iac.json` warning; so does a file that is not a
 JSON object. A missing file is fine. A path that leaves the repository

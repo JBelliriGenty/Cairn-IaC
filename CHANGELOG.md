@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.12.0 (2026-11-28)
+
+- `bare_metal_group` takes one group name or a list of groups. A machine
+  in any of them counts as physical: map column "outside the cluster",
+  `physical` in the host table, no "guest" label. A group your upgrade
+  playbooks must not target (a Mac, say) can now count as physical
+  without joining the group they target.
+- `bare_metal_group` is also read from `.cairn-iac.json`, so CI (`--check`),
+  `host_table()` and the page agree. In Settings the field is a
+  comma-separated list.
+
 ## 1.11.0 (2026-11-22)
 
 - New machine writes the host table too: with `host_table` and the

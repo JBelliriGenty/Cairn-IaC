@@ -146,7 +146,7 @@ The Drift view (with a count in the menu and on the overview) and
 A finding known and kept on purpose can be **accepted** with a reason (server: the Accept button; else
 `accepted_findings` in the config, keyed by the finding's `id` from `--check --json`).
 
-**In the repository, for CI.** `accepted_findings`, `vcpu_ratio`, `node_capacity` and `required_roles`
+**In the repository, for CI.** `accepted_findings`, `vcpu_ratio`, `node_capacity`, `required_roles` and `bare_metal_group`
 can live in `.cairn-iac.json` at the root of the IaC repository (key `repo_settings`); they win over the
 config and the server's settings, so `--check` in CI and the page agree. The server's Accept button then
 edits that file like any other change (diff, commit, pull request in `agit`/`branch` mode: the acceptance
@@ -236,7 +236,7 @@ Every key is optional; paths are relative to the config file.
 | `inventory` | Ansible inventory (`ansible/inventory/hosts.yml`) |
 | `playbooks`, `roles` | Ansible directories (`ansible/playbooks`, `ansible/roles`) |
 | `node_group` | inventory group of the Proxmox nodes, shown as map columns (`proxmox_nodes`) |
-| `bare_metal_group` | inventory group of physical machines outside the cluster (`bare_metal`) |
+| `bare_metal_group` | inventory group of physical machines outside the cluster, or a list of groups (`bare_metal`) |
 | `generic_playbooks` | playbook names (no `.yml`) never shown as a machine's main playbook, e.g. fleet-wide upgrades |
 | `required_roles` | roles every inventory machine must get, checked in Drift (empty) |
 | `require_description` | every inventory machine must say what it is for: Tofu `description` or a `description` host variable (`false`) |

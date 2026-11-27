@@ -537,7 +537,7 @@ const FR = {
   "Roles directory": "Répertoire des rôles",
   "Inventory groups": "Groupes d'inventaire",
   "Group of the Proxmox nodes": "Groupe des nœuds Proxmox",
-  "Group of the physical machines outside the cluster": "Groupe des machines physiques hors cluster",
+  "Groups of the physical machines outside the cluster (comma-separated)": "Groupes des machines physiques hors cluster (séparés par des virgules)",
   "Fleet-wide playbooks, never shown as a machine's own (comma-separated)": "Playbooks de parc, jamais montrés comme ceux d'une machine (séparés par des virgules)",
   "Path of a change": "Trajet d'un changement",
   "Machine shown first": "Machine montrée d'abord",
@@ -1026,7 +1026,7 @@ function renderNew(k) {
   const tf = m.tofu, st = S.settings, nodes = [...new Set([...nodeKeys, ...Object.values(M).map(x => x.node).filter(Boolean)])];
   const ids = [...D.tofu.map(x => x.id), ...Object.keys(D.firewalls).map(Number)].filter(n => n > 0);
   const direct = Object.keys(D.direct || {}).filter(g => D.direct[g].includes(m.host));
-  const groups = Object.keys(D.groups).filter(g => g !== st.node_group && g !== st.bare_metal_group).sort();
+  const groups = Object.keys(D.groups).filter(g => g !== st.node_group && !D.bare_groups.includes(g)).sort();
   const v = (n, d) => esc(keep[n] ?? d ?? "");
   f.innerHTML = `<label class="wide">${t("Model")}<select name="model">${models.map(x => `<option value="${esc(x.key)}"${x === m ? " selected" : ""}>${esc(x.name)} · ${esc(x.tofu.kind)}${x.id != null ? " " + x.id : ""}${x.ip ? " · " + esc(x.ip) : ""}</option>`).join("")}</select></label>
     <label>${t("Name")}<input name="name" required maxlength="63" value="${v("name")}"></label>
@@ -1062,7 +1062,7 @@ $("#new-form").addEventListener("submit", e => {
 const FORM = [
   ["Page", [["title", "Title"], ["subtitle", "Subtitle"], ["lang", "Default language", "lang"]]],
   ["Repository layout", [["tofu_dir", "Tofu directory"], ["inventory", "Ansible inventory"], ["playbooks", "Playbooks directory"], ["roles", "Roles directory"]]],
-  ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Group of the physical machines outside the cluster"],
+  ["Inventory groups", [["node_group", "Group of the Proxmox nodes"], ["bare_metal_group", "Groups of the physical machines outside the cluster (comma-separated)", "list"],
     ["generic_playbooks", "Fleet-wide playbooks, never shown as a machine's own (comma-separated)", "list"]]],
   ["Drift", [["repo_settings", "Settings file in the repository (JSON, empty: these settings only): its accepted findings, vCPU ratio, node capacity and required roles win over the settings here, and CI reads them too. With it, accepting a finding is a commit."],
     ["required_roles", "Roles every inventory machine must get (comma-separated)", "list"]]],
@@ -1093,7 +1093,7 @@ function renderSettings() {
     }
     if (type === "num") return `<label class="wide">${esc(label)}<input type="number" min="1" max="64" step="0.5" id="${id}" data-p="${p}" data-t="num" value="${esc(v ?? 1)}" style="max-width:120px"></label>`;
     if (type === "lang") return `<label>${esc(label)}<select id="${id}" data-p="${p}"><option value="">${t("Browser language")}</option>${Object.entries(LANGS).map(([k, l]) => `<option value="${k}"${v === k ? " selected" : ""}>${l.name}</option>`).join("")}</select></label>`;
-    return `<label${/url|text|generic|required|repo_settings|renovate_file/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? (v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$|repo_settings|renovate_file/.test(p) ? ' class="mono"' : ""}></label>`;
+    return `<label${/url|text|generic|required|repo_settings|renovate_file/.test(p) || p.startsWith("links.") ? ' class="wide"' : ""}>${esc(label)}<input id="${id}" data-p="${p}"${type === "list" ? ' data-t="list"' : ""} value="${esc(type === "list" ? [].concat(v || []).join(", ") : v)}"${/url|links|dir|inventory|playbooks|roles|path|tofu$|repo_settings|renovate_file/.test(p) ? ' class="mono"' : ""}></label>`;
   };
   // keys the repository's settings file sets win over the fields here: say so under their card
   const RS = D.repo_settings, fixed = fs => RS ? fs.map(f => f[0]).filter(p => RS.keys.includes(p)) : [];

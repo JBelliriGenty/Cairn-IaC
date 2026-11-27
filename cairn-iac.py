@@ -20,6 +20,19 @@ except ImportError:
     sys.exit("cairn-iac: PyYAML is required (Debian: apt install python3-yaml, else pip install pyyaml)")
 
 HERE = pathlib.Path(__file__).resolve().parent
+
+
+def bare_groups(cfg):
+    """The inventory groups of physical machines: bare_metal_group is one group name or a list of them."""
+    g = cfg["bare_metal_group"]
+    return [g] if isinstance(g, str) else [x for x in g if isinstance(x, str)]
+
+
+def bare_hosts(cfg, groups):
+    """The hosts of those groups, each once, in group order."""
+    return list(dict.fromkeys(h for g in bare_groups(cfg) for h in groups.get(g, [])))
+
+
 DEFAULTS = {
     "repo": ".", "title": "Cairn IaC", "subtitle": "", "lang": "",
     "tofu_dir": "tofu", "inventory": "ansible/inventory/hosts.yml",
@@ -474,7 +487,7 @@ def drift(cfg, machines, firewalls, groups, ips, playbooks, inv_text, fl=(), cap
     hosts = {key(h): h for h in ips}
     tofu = {key(m["name"]): m for m in machines}
     by_id = {str(m["id"]): m for m in machines if m["id"]}
-    outside = {key(h) for g in (cfg["node_group"], cfg["bare_metal_group"]) for h in groups.get(g, [])}
+    outside = {key(h) for g in (cfg["node_group"], *bare_groups(cfg)) for h in groups.get(g, [])}
     got = {}
     for plays in playbooks.values():
         for p in plays:
@@ -562,7 +575,7 @@ def num(v):
     return int(m.group(1)) if m else None
 
 
-REPO_KEYS = ("accepted_findings", "vcpu_ratio", "node_capacity", "required_roles", "host_table", "require_description")
+REPO_KEYS = ("accepted_findings", "vcpu_ratio", "node_capacity", "required_roles", "host_table", "require_description", "bare_metal_group")
 FINDING_ID = re.compile(r"[a-z_]+:[^\s]{1,200}")
 
 
@@ -585,7 +598,8 @@ def repo_settings(cfg, repo):
           "vcpu_ratio": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
           "node_capacity": lambda v: isinstance(v, dict) and all(isinstance(c, dict) for c in v.values()),
           "required_roles": lambda v: isinstance(v, list) and all(isinstance(r, str) for r in v),
-          "host_table": lambda v: isinstance(v, str), "require_description": lambda v: isinstance(v, bool)}
+          "host_table": lambda v: isinstance(v, str), "require_description": lambda v: isinstance(v, bool),
+          "bare_metal_group": lambda v: isinstance(v, str) or isinstance(v, list) and all(isinstance(g, str) for g in v)}
     bad = [k for k in REPO_KEYS if k in raw and not ok[k](raw[k])]
     return {k: raw[k] for k in REPO_KEYS if k in raw and k not in bad}, rel, f"{rel}: wrong type for {', '.join(bad)}" if bad else ""
 
@@ -834,7 +848,7 @@ def collect(cfg, repo):
         "workflow": cfg["workflow"], "note": cfg["note"], "playbook_prefix": pb_prefix,
         "generic_playbooks": cfg["generic_playbooks"], "links": cfg["links"],
         "paths": {k: pathlib.PurePosixPath(cfg[k]).as_posix() for k in ("inventory", "playbooks", "roles")},
-        "nodes": groups.get(cfg["node_group"], []), "bare": groups.get(cfg["bare_metal_group"], []),
+        "nodes": groups.get(cfg["node_group"], []), "bare": bare_hosts(cfg, groups), "bare_groups": bare_groups(cfg),
         "tofu": machines, "firewalls": firewalls, "groups": groups, "direct": direct, "ips": ips, "descriptions": descs,
         "playbooks": playbooks, "roles": roles, "findings": findings, "flows": fl, "capacity": cap, "server": None,
         "repo_settings": {"file": rs_file, "keys": sorted(over), "error": rs_error} if rs_file else None,
@@ -855,7 +869,7 @@ def collect(cfg, repo):
 def collect_empty(cfg):
     return {"title": cfg["title"], "subtitle": cfg["subtitle"], "lang": cfg["lang"], "rev": "", "workflow": {}, "note": None,
             "playbook_prefix": "", "generic_playbooks": [], "links": {}, "paths": {"inventory": "", "playbooks": "", "roles": ""},
-            "nodes": [], "bare": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "descriptions": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None, "updates": None}
+            "nodes": [], "bare": [], "bare_groups": [], "tofu": [], "firewalls": {}, "groups": {}, "direct": {}, "ips": {}, "descriptions": {}, "playbooks": {}, "roles": {}, "findings": [], "flows": [], "capacity": {}, "machines": [], "server": None, "repo_settings": None, "updates": None}
 
 
 def favicon():
@@ -1412,7 +1426,7 @@ def new_machine(op, cfg, repo):
     if not gs:
         raise Refused("Pick at least one inventory group")
     for g in gs:
-        if g not in groups or g in (cfg["node_group"], cfg["bare_metal_group"]):
+        if g not in groups or g in (cfg["node_group"], *bare_groups({**cfg, **repo_settings(cfg, repo)[0]})):
             raise Refused("Group {group} not found in the inventory, or not written as a block", group=g)
     home = host_group(inv_text, next((h for h in ips if key(h) == key(model["name"])), None))
     for g in sorted(gs, key=lambda g: g != home):
@@ -1440,10 +1454,11 @@ def new_machine(op, cfg, repo):
         raise Refused("The edit did not give the expected file: edit it in the file")
     # the host table (host_table with hosts:begin/end markers): written again from the new state, so the
     # not_in_host_table finding does not fail the pull request
-    ht = repo_rel({**cfg, **repo_settings(cfg, repo)[0]}.get("host_table"))
+    rcfg = {**cfg, **repo_settings(cfg, repo)[0]}
+    ht = repo_rel(rcfg.get("host_table"))
     if ht and (repo / ht).is_file():
         g2 = read_inventory(inv_text)[0]
-        nb = g2.get(cfg["node_group"], []), g2.get(cfg["bare_metal_group"], [])
+        nb = g2.get(cfg["node_group"], []), bare_hosts(rcfg, g2)
         merged = merge({"tofu": ms, "firewalls": fws, "ips": ips2, "descriptions": read_descriptions(inv_text),
                         "playbooks": {}, "groups": {}, "nodes": nb[0], "bare": nb[1]})
         new = put_host_table(read(ht), host_table(merged, *nb, read_descriptions(inv_text, "access"), cfg.get("lang")))
@@ -1874,6 +1889,8 @@ class App:
                 v = [name_ok(x, "playbook") for x in (v or [])]
             elif k == "required_roles":
                 v = [name_ok(x, "role") for x in (v or [])]
+            elif k == "bare_metal_group":
+                v = [name_ok(x, "group") for x in v] if isinstance(v, list) else str(v or "")[:500]
             elif k == "vcpu_ratio":
                 if isinstance(v, bool) or not isinstance(v, (int, float)) or not 1 <= v <= 64:
                     raise Refused("Invalid {what}: {value}", what=k, value=str(v)[:20])

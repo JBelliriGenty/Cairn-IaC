@@ -71,6 +71,17 @@ with tempfile.TemporaryDirectory() as t2:
     r = subprocess.run([sys.executable, str(HERE / "cairn-iac.py"), "-c", str(c), "--check"], capture_output=True, text=True)
     assert r.returncode == 0 and "(accepted: on purpose)" in r.stdout and "0 warnings, 0 notes, 10 accepted" in r.stderr, r
 
+# ---- bare_metal_group: one group name, or a list of groups (1.12.0) ----
+root = (cfg2["base"] / cfg2["repo"]).resolve()
+b1 = ci.collect({**cfg2, "bare_metal_group": "printers"}, root)
+b2 = ci.collect({**cfg2, "bare_metal_group": ["printers", "guests", "printers"]}, root)
+assert b1["bare"] == ["printer"] and b1["bare_groups"] == ["printers"], b1["bare"]
+assert sorted(b2["bare"]) == ["db", "printer", "web"] and len(b2["bare"]) == 3 and b2["bare_groups"] == ["printers", "guests", "printers"], b2["bare"]
+assert next(m for m in b2["machines"] if m["key"] == "web")["phys"] and not next(m for m in b1["machines"] if m["key"] == "web")["phys"]
+tb = lambda b: " ".join(ci.host_table(b["machines"], b["nodes"], b["bare"], {}, "fr"))
+assert "| WEB | 10.0.0.21 | physique |" in tb(b2) and "| WEB | 10.0.0.21 | LXC 201 |" in tb(b1) and "| PRINTER | 10.0.0.40 | physique |" in tb(b1)
+assert ci.bare_groups({"bare_metal_group": ["a", 3, "b"]}) == ["a", "b"]
+
 # ---- the repository's settings file (.cairn-iac.json) wins over the config; a wrong type is left out, with a finding ----
 with tempfile.TemporaryDirectory() as t3:
     repo3 = pathlib.Path(t3)
@@ -84,6 +95,12 @@ with tempfile.TemporaryDirectory() as t3:
     assert "over_allocated:pve2:cores" not in f3 and d3["repo_settings"] == {"file": ".cairn-iac.json", "keys": ["accepted_findings", "vcpu_ratio"],
                                                                               "error": ".cairn-iac.json: wrong type for required_roles"}, d3["repo_settings"]
     assert f3["repo_settings:.cairn-iac.json"]["severity"] == "warn" and "required_roles:printer" in f3  # config's required_roles kept
+    # bare_metal_group in the file: a list of names wins over the config; a wrong type is left out
+    (repo3 / ".cairn-iac.json").write_text(json.dumps({"bare_metal_group": ["guests"]}), encoding="utf-8")
+    assert sorted(ci.collect(cfg3, repo3)["bare"]) == ["db", "web"]
+    (repo3 / ".cairn-iac.json").write_text(json.dumps({"bare_metal_group": [1]}), encoding="utf-8")
+    d3 = ci.collect(cfg3, repo3)
+    assert d3["bare"] == [] and d3["repo_settings"]["error"] == ".cairn-iac.json: wrong type for bare_metal_group", d3["repo_settings"]
     (repo3 / ".cairn-iac.json").write_text("{not json", encoding="utf-8")
     d3 = ci.collect(cfg3, repo3)
     assert d3["repo_settings"]["keys"] == [] and d3["findings"][0]["kind"] == "repo_settings" and "accepted" in {f["id"]: f for f in d3["findings"]}["ip_mismatch:db"]
@@ -381,6 +398,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (app2.settings()["vcpu_ratio"], app2.settings()["accepted_findings"]) == (4, {"firewall_orphan:old": "made by hand"})
     assert "reason" in refused(app2.put_settings, {"accepted_findings": {"firewall_orphan:old": " "}})
     assert "reason" in refused(app2.put_settings, {"accepted_findings": {"bad id": "x"}})
+    app2.put_settings({"bare_metal_group": ["printers", "guests"]})
+    assert app2.settings()["bare_metal_group"] == ["printers", "guests"]
+    assert "group" in refused(app2.put_settings, {"bare_metal_group": ["ok", "bad name"]})
+    app2.put_settings({"bare_metal_group": "printers"})
+    assert app2.settings()["bare_metal_group"] == "printers"
     assert "vcpu_ratio" in refused(app2.put_settings, {"vcpu_ratio": 0})
     assert "vcpu_ratio" in refused(app2.put_settings, {"vcpu_ratio": True})
     assert "depth" in refused(app2.put_settings, {"git": {**cfg["git"], "depth": "0"}})
